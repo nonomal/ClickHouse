@@ -1,3 +1,5 @@
+#include <base/defines.h>
+#include <base/sleep.h>
 #include "config.h"
 #if USE_AVRO
 
@@ -205,6 +207,46 @@ IcebergMetadata::IcebergMetadata(
     , data_lake_settings(configuration_->getDataLakeSettings())
     , write_format(configuration_->format)
 {
+    if (!background_metadata_prefetcher_thread)
+        background_metadata_prefetcher_thread = std::make_unique<ThreadFromGlobalPool>([this]() { backgroundMetadataPrefetcherThread(); });
+}
+
+IcebergMetadata::~IcebergMetadata()
+{
+    /// TODO: wrongly placed, temp for now
+    shutdown_called = true;
+    if (background_metadata_prefetcher_thread && background_metadata_prefetcher_thread->joinable())
+        background_metadata_prefetcher_thread->join();
+}
+
+void IcebergMetadata::backgroundMetadataPrefetcherThread()
+{
+    try
+    {
+        while (!shutdown_called.load())
+        {
+
+            preheatCachesWithLatestVersions(
+                object_storage,
+                persistent_components.table_path,
+                data_lake_settings,
+                persistent_components.metadata_cache,
+                Context::getGlobalContextInstance()->getBackgroundContext(),
+                log.get(),
+                persistent_components.table_uuid);
+
+            LOG_INFO(getLogger("DDDBG"), "backgroundMetadataPrefetchedThread ... cch={}",
+                     static_cast<void*>(persistent_components.metadata_cache.get()));
+
+            sleepForSeconds(2);
+        }
+        LOG_INFO(getLogger("DDDBG"), "backgroundMetadataPrefetchedThread finished");
+    }
+    catch (...)
+    {
+        DB::tryLogCurrentException(log);
+        chassert(false);
+    }
 }
 
 Int32 IcebergMetadata::parseTableSchema(

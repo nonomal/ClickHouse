@@ -1,4 +1,5 @@
 #pragma once
+#include <Common/Logger.h>
 #include "config.h"
 
 #if USE_AVRO
@@ -8,6 +9,7 @@
 #include <Common/ProfileEvents.h>
 #include <Common/CurrentMetrics.h>
 #include <Common/logger_useful.h>
+#include <Storages/ObjectStorage/DataLakes/Common/FileListCache.h>
 #include <Storages/ObjectStorage/DataLakes/Iceberg/ManifestFile.h>
 #include <Storages/ObjectStorage/StorageObjectStorage.h>
 
@@ -95,6 +97,7 @@ public:
 
     IcebergMetadataFilesCache(const String & cache_policy, size_t max_size_in_bytes, size_t max_count, double size_ratio)
         : Base(cache_policy, CurrentMetrics::IcebergMetadataFilesCacheBytes, CurrentMetrics::IcebergMetadataFilesCacheFiles, max_size_in_bytes, max_count, size_ratio)
+        , file_list_cache(std::make_shared<DataLakeFileListCache>(max_size_in_bytes))
     {}
 
     static String getKey(const String& table_uuid, const String & data_path) { return table_uuid + data_path; }
@@ -147,6 +150,16 @@ public:
         return std::get<Iceberg::ManifestFilePtr>(result.first->cached_element);
     }
 
+    std::optional<DataLakeFileListCachePtr> getFileListCache()
+    {
+        if (file_list_cache)
+        {
+            return file_list_cache; /// TODO: double check nothing moves
+        }
+        LOG_INFO(getLogger("DDDBG"), "getFileListCache: p={}", static_cast<void*>(file_list_cache.get()));
+        return {};
+    }
+
 private:
     /// Called for each individual entry being evicted from cache
     void onEntryRemoval(const size_t weight_loss, const MappedPtr & mapped_ptr) override
@@ -154,6 +167,8 @@ private:
         ProfileEvents::increment(ProfileEvents::IcebergMetadataFilesCacheWeightLost, weight_loss);
         UNUSED(mapped_ptr);
     }
+
+    DataLakeFileListCachePtr file_list_cache;
 };
 
 using IcebergMetadataFilesCachePtr = std::shared_ptr<IcebergMetadataFilesCache>;
