@@ -207,49 +207,49 @@ IcebergMetadata::IcebergMetadata(
     , data_lake_settings(configuration_->getDataLakeSettings())
     , write_format(configuration_->format)
 {
-    /// TODO: no need to start when cache is disabled
-    if (!background_metadata_prefetcher_thread)
-        background_metadata_prefetcher_thread = std::make_unique<ThreadFromGlobalPool>([this]() { backgroundMetadataPrefetcherThread(); });
+
+    /// TODO: wrongly placed, temp for now - use startup/shutdown
+    /// TODO: use its own pool instead of common schedule pool
+    if (cache_ptr)
+    {
+        background_metadata_prefetcher_task = context_->getSchedulePool().createTask(
+            StorageID::createEmpty(),
+            "wtf",
+            [this]
+            {
+                this->backgroundMetadataPrefetcherThread();
+            }
+        );
+        /// TODO: move to startup
+        background_metadata_prefetcher_task->activateAndSchedule();
+    }
 }
 
 IcebergMetadata::~IcebergMetadata()
 {
-    /// TODO: wrongly placed, temp for now
-    shutdown_called = true;
-    if (background_metadata_prefetcher_thread && background_metadata_prefetcher_thread->joinable())
-        background_metadata_prefetcher_thread->join();
+    /// TODO: wrongly placed, temp for now - use startup/shutdown
+    if (background_metadata_prefetcher_task)
+        background_metadata_prefetcher_task->deactivate();
 }
 
 /// TODO: in the end, schedule in a pool (every Metadata schedules in a pool, instead of running its own)
 void IcebergMetadata::backgroundMetadataPrefetcherThread()
+try
 {
-    /// TODO: call setThreadName
-    try
-    {
-        while (!shutdown_called.load())
-        {
+    preheatCachesWithLatestVersions(
+        object_storage,
+        persistent_components.table_path,
+        persistent_components.metadata_cache);
 
-            preheatCachesWithLatestVersions(
-                object_storage,
-                persistent_components.table_path,
-                data_lake_settings,
-                persistent_components.metadata_cache,
-                Context::getGlobalContextInstance()->getBackgroundContext(),
-                log.get(),
-                persistent_components.table_uuid);
+    LOG_INFO(getLogger("DDDBG"), "backgroundMetadataPrefetchedThread ... cch={}",
+             static_cast<void*>(persistent_components.metadata_cache.get()));
 
-            LOG_INFO(getLogger("DDDBG"), "backgroundMetadataPrefetchedThread ... cch={}",
-                     static_cast<void*>(persistent_components.metadata_cache.get()));
-
-            sleepForSeconds(2);
-        }
-        LOG_INFO(getLogger("DDDBG"), "backgroundMetadataPrefetchedThread finished");
-    }
-    catch (...)
-    {
-        DB::tryLogCurrentException(log);
-        chassert(false);
-    }
+    background_metadata_prefetcher_task->scheduleAfter(2000);
+}
+catch (...)
+{
+    DB::tryLogCurrentException(log);
+    chassert(false);
 }
 
 Int32 IcebergMetadata::parseTableSchema(

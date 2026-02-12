@@ -158,8 +158,7 @@ private:
 
     /// TODO: reconsider location & initialization of it - it's temp now
     /// TODO: think whether possible to run a single prefetcher per multiple tables - if it's safe also
-    std::unique_ptr<ThreadFromGlobalPool> background_metadata_prefetcher_thread;
-    std::atomic_bool shutdown_called = false;
+    BackgroundSchedulePoolTaskHolder background_metadata_prefetcher_task;
 
     void backgroundMetadataPrefetcherThread();
 };

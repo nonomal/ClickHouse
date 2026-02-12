@@ -13,7 +13,7 @@ std::vector<String> listFiles(
     const String & path,
     const String & prefix, const String & suffix,
     std::optional<DataLakeFileListCachePtr> cache = {},
-    bool bypass_cache = false);
+    bool use_cache = false);
 /// TODO: ^^^ make better passing rather than by optional value
 /// also avoid default param here (double check) to pass/skip caching explicitly
 /// TODO: bypass_cache TBD as part of Context - the setting which may come from query, session, config
@@ -24,5 +24,5 @@ std::vector<String> listFiles(
     const String & prefix,
     const std::function<bool(const RelativePathWithMetadata &)> & check_need,
     std::optional<DataLakeFileListCachePtr> cache = {},
-    bool bypass_cache = false);
+    bool use_cache = false);
 }

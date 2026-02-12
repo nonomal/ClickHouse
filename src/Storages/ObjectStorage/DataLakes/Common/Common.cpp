@@ -13,7 +13,7 @@ std::vector<String> listFiles(
     const String & path,
     const String & prefix, const String & suffix,
     std::optional<DataLakeFileListCachePtr> cache,
-    bool bypass_cache)
+    bool use_cache)
 {
     return listFiles(
         object_storage,
@@ -21,7 +21,7 @@ std::vector<String> listFiles(
         prefix,
         [&suffix](const RelativePathWithMetadata & files_with_metadata) { return files_with_metadata.relative_path.ends_with(suffix); },
         cache,
-        bypass_cache);
+        use_cache);
 }
 
 
@@ -31,7 +31,7 @@ std::vector<String> listFiles(
     const String & prefix,
     const std::function<bool(const RelativePathWithMetadata &)> & check_need,
     std::optional<DataLakeFileListCachePtr> cache,
-    bool bypass_cache)
+    bool use_cache)
 {
     /// TODO: are we sure this is a universal x-data-lake path modifier? double check for DeltaLake
     auto key = std::filesystem::path(path) / prefix;
@@ -52,10 +52,10 @@ std::vector<String> listFiles(
 
     if (cache)
     {
-        if (bypass_cache)
-            return cache.value()->simulateGetAndSetLatest(key, create_fn);
-        else
+        if (use_cache)
             return cache.value()->simulateGetTolerated(key, create_fn, 3);
+        else
+            return cache.value()->simulateGetAndSetLatest(key, create_fn);
     }
     return create_fn();
 }
