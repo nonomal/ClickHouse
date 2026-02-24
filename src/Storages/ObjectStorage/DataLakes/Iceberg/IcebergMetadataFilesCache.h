@@ -109,7 +109,7 @@ struct IcebergMetadataFilesCacheCell : private boost::noncopyable
     }
     explicit IcebergMetadataFilesCacheCell(LatestMetadataVersionPtr latest_metadata_version)
         : cached_element(latest_metadata_version)
-        , memory_bytes(SIZE_IN_MEMORY_OVERHEAD) /// TODO: caclulate the size here
+        , memory_bytes(SIZE_IN_MEMORY_OVERHEAD) /// TODO: calculate the size here
     {
     }
     // explicit IcebergMetadataFilesCacheCell(MetadataVersion && metadata_version)
