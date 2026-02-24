@@ -236,13 +236,21 @@ IcebergMetadata::~IcebergMetadata()
 void IcebergMetadata::backgroundMetadataPrefetcherThread()
 try
 {
-    preheatCachesWithLatestVersions(
+    MetadataFileWithInfo latest = getLatestOrExplicitMetadataFileAndVersion(
         object_storage,
         persistent_components.table_path,
-        persistent_components.metadata_cache);
+        data_lake_settings,
+        persistent_components.metadata_cache,
+        Context::getGlobalContextInstance()->getBackgroundContext(),
+        log.get(),
+        persistent_components.table_uuid,
+        0);
 
-    LOG_INFO(getLogger("DDDBG"), "backgroundMetadataPrefetchedThread ... cch={}",
-             static_cast<void*>(persistent_components.metadata_cache.get()));
+    LOG_INFO(getLogger("DDDBG"), "backgroundMetadataPrefetchedThread ... path={} uuid={} metadata.json={} version={}",
+             // static_cast<void*>(persistent_components.metadata_cache.get()),
+             persistent_components.table_path,
+             persistent_components.table_uuid ? *(persistent_components.table_uuid) : "none",
+             latest.path, latest.version);
 
     background_metadata_prefetcher_task->scheduleAfter(2000);
 }
