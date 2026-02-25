@@ -104,6 +104,7 @@ def run_fuzz_job(check_name: str):
 
     temp_dir = Path(f"{cwd}/ci/tmp/")
     assert Path(f"{temp_dir}/clickhouse").exists(), "ClickHouse binary not found"
+    Shell.check(f"chmod +x {temp_dir}/clickhouse", verbose=True, strict=True)
 
     docker_image = DockerImage.get_docker_image(IMAGE_NAME).pull_image()
 

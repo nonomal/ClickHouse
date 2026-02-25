@@ -185,7 +185,9 @@ class Targeting:
             info=info,
         )
 
-    def get_map_file_line_to_symbol_tests(self, binary_path):
+    def get_map_file_line_to_symbol_tests(
+        self, binary_path, bidirectional=True, line_expansion_radius=1
+    ):
         """
         Build a mapping from (file, line) to (resolved symbol, [tests]).
         Returns:
@@ -193,15 +195,20 @@ class Targeting:
         """
         assert self.info.pr_number > 0, "Find tests by diff applicable for PRs only"
         dts = DiffToSymbols(binary_path, self.info.pr_number)
-        file_line_to_address_linkagename_symbol = dts.get_map_line_to_symbol()
+        resolved_lines = dts.get_map_line_to_symbol(
+            bidirectional=bidirectional,
+            line_expansion_radius=line_expansion_radius,
+        )
         not_resolved_file_lines = {}
         symbols_to_file_lines = {}
 
-        for (file_, line_), (
+        for (
+            file_,
+            line_,
             address,
             linkage_name,
             symbol,
-        ) in file_line_to_address_linkagename_symbol.items():
+        ) in resolved_lines:
             if symbol in symbols_to_file_lines:
                 continue
             if not symbol:
@@ -230,7 +237,7 @@ class Targeting:
 
         return map_file_line_to_test
 
-    def get_most_relevant_tests(self, binary_path, max_tests=500):
+    def get_most_relevant_tests(self, binary_path, max_tests=100):
         """
         1. Get changed symbols from diff + DWARF.
         2. Get tests covering each symbol from the coverage DB.
@@ -313,12 +320,10 @@ class Targeting:
                 f"score={test_scores[bot]:.4f} ({bot})\n"
             )
         info += "Selected tests:\n"
-        for test in selected_tests[:20]:
+        for test in selected_tests:
             sc = test_scores[test]
             ns = len(test_symbols[test])
             info += f"  - {test}  (symbols={ns}, score={sc:.4f})\n"
-        if len(selected_tests) > 20:
-            info += f"    ... and {len(selected_tests) - 20} more\n"
         info += f"Total unique tests: {len(selected_tests)}\n"
 
         return list(selected_tests), Result(

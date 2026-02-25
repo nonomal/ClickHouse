@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import io
+import os
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -62,65 +64,112 @@ class DiffToSymbols:
                         result.append((f.path, line.source_line_no))
         return result
 
-    def run_query(self, line_numbers: list) -> dict:
+    @staticmethod
+    def expand_line_numbers(line_numbers: list, radius: int) -> list:
+        """Expand each (file, line) to include +/-radius nearby lines."""
+        expanded = set()
+        for filename, line_no in line_numbers:
+            for offset in range(-radius, radius + 1):
+                new_line = line_no + offset
+                if new_line > 0:
+                    expanded.add((filename, new_line))
+        return sorted(expanded)
+
+    def run_query(self, line_numbers: list, bidirectional: bool = False) -> list:
         """
         Execute a ClickHouse query with the provided (filename, line_number) tuples.
 
         Args:
             line_numbers: List of tuples (filename, line_number)
+            bidirectional: If True, also find the nearest function *after* each
+                changed line via a reverse ASOF JOIN (UNION ALL).
 
         Returns:
-            Dictionary mapping (filename, line_number) -> (address, linkage_name, symbol)
-            Example: {('src/foo.cpp', 42): ('0x12345', '_Z...symbol', 'myFunction()')}
+            List of (filename, line_number, address, linkage_name, symbol) tuples,
+            deduplicated by (filename, line_number, symbol).
         """
-        # Convert list of tuples to CSV format for ClickHouse stdin
         out = io.StringIO()
         out.write("filename,line\n")
         for filename, line_no in line_numbers:
             out.write("{},{}\n".format(filename, line_no))
         csv_payload = out.getvalue()
 
-        query = (
-            """
-        SELECT
-            diff.filename,
-            diff.line,
-            binary.address,
-            binary.linkage_name,
-            if(empty(binary.linkage_name),
-                demangle(addressToSymbol(binary.address)),
-                demangle(binary.linkage_name)) AS symbol
-        FROM file('stdin', 'CSVWithNames', 'filename String, line UInt32') AS diff
-        ASOF LEFT JOIN
-        (
-            SELECT
-                decl_file,
-                decl_line,
-                linkage_name,
-                ranges[1].1 AS address
-            FROM file('{ch_path}', 'DWARF')
-            WHERE (tag = 'subprogram') AND (notEmpty(linkage_name) OR address != 0) AND notEmpty(decl_file)
-        ) AS binary
-        ON basename(diff.filename) = basename(binary.decl_file) AND diff.line >= binary.decl_line
-        FORMAT TSV
-            """.format(
-                ch_path=self.clickhouse_path
-            )
-        ).strip()
+        dwarf_subquery = (
+            "(SELECT decl_file, decl_line, linkage_name, ranges[1].1 AS address "
+            "FROM file('{ch_path}', 'DWARF') "
+            "WHERE (tag = 'subprogram') AND (notEmpty(linkage_name) OR address != 0) "
+            "AND notEmpty(decl_file))"
+        ).format(ch_path=self.clickhouse_path)
 
-        proc = subprocess.run(
-            [self.clickhouse_path, "local", "--query", query],
-            input=csv_payload,
-            text=True,
-            capture_output=True,
-            check=False,
+        select_expr = (
+            "diff.filename, diff.line, binary.address, binary.linkage_name, "
+            "if(empty(binary.linkage_name), "
+            "demangle(addressToSymbol(binary.address)), "
+            "demangle(binary.linkage_name)) AS symbol"
         )
+
+        if bidirectional:
+            fd, csv_path = tempfile.mkstemp(suffix=".csv", prefix="diff_lines_")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(csv_payload)
+
+                diff_table = (
+                    f"file('{csv_path}', 'CSVWithNames', "
+                    f"'filename String, line UInt32')"
+                )
+                query = (
+                    "SELECT {select_expr} "
+                    "FROM {diff_table} AS diff "
+                    "ASOF LEFT JOIN {dwarf} AS binary "
+                    "ON basename(diff.filename) = basename(binary.decl_file) "
+                    "AND diff.line >= binary.decl_line "
+                    "UNION ALL "
+                    "SELECT {select_expr} "
+                    "FROM {diff_table} AS diff "
+                    "ASOF LEFT JOIN {dwarf} AS binary "
+                    "ON basename(diff.filename) = basename(binary.decl_file) "
+                    "AND diff.line <= binary.decl_line "
+                    "FORMAT TSV"
+                ).format(
+                    select_expr=select_expr,
+                    diff_table=diff_table,
+                    dwarf=dwarf_subquery,
+                )
+
+                proc = subprocess.run(
+                    [self.clickhouse_path, "local", "--query", query],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+            finally:
+                os.unlink(csv_path)
+        else:
+            query = (
+                "SELECT {select_expr} "
+                "FROM file('stdin', 'CSVWithNames', "
+                "'filename String, line UInt32') AS diff "
+                "ASOF LEFT JOIN {dwarf} AS binary "
+                "ON basename(diff.filename) = basename(binary.decl_file) "
+                "AND diff.line >= binary.decl_line "
+                "FORMAT TSV"
+            ).format(select_expr=select_expr, dwarf=dwarf_subquery)
+
+            proc = subprocess.run(
+                [self.clickhouse_path, "local", "--query", query],
+                input=csv_payload,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
         if proc.returncode != 0:
             print(proc.stderr, file=sys.stderr)
             raise SystemExit(proc.returncode)
 
-        # Parse TSV output into dictionary
-        result = {}
+        result = []
+        seen = set()
         for line in proc.stdout.strip().split("\n"):
             if not line:
                 continue
@@ -128,16 +177,23 @@ class DiffToSymbols:
             if len(parts) >= 5:
                 filename, line_no, address, linkage_name, symbol = (
                     parts[0],
-                    parts[1],
+                    int(parts[1]),
                     parts[2],
                     parts[3],
                     parts[4],
                 )
-                result[(filename, int(line_no))] = (address, linkage_name, symbol)
+                key = (filename, line_no, symbol)
+                if key not in seen:
+                    seen.add(key)
+                    result.append(
+                        (filename, line_no, address, linkage_name, symbol)
+                    )
             elif len(parts) >= 2:
-                # Handle case where no match was found (LEFT JOIN)
-                filename, line_no = parts[0], parts[1]
-                result[(filename, int(line_no))] = (None, None, None)
+                filename, line_no = parts[0], int(parts[1])
+                key = (filename, line_no, None)
+                if key not in seen:
+                    seen.add(key)
+                    result.append((filename, line_no, None, None, None))
 
         return result
 
@@ -146,18 +202,32 @@ class DiffToSymbols:
         diff_bytes = self.fetch(diff_url)
         return self.parse_diff_to_line_numbers(diff_bytes)
 
-    def get_map_line_to_symbol(self):
+    def get_map_line_to_symbol(
+        self, bidirectional=False, line_expansion_radius=0
+    ):
         """
         Get symbols mapping for changed lines.
 
+        Args:
+            bidirectional: Also resolve the nearest function *after* each line
+                via a reverse ASOF JOIN.
+            line_expansion_radius: When > 0, expand each changed line to +/-N
+                nearby lines before resolving symbols.
+
         Returns:
-            Dictionary mapping (filename, line_number) -> (address, linkage_name, symbol)
-            Empty dict if there are no changes in source code
+            List of (filename, line_number, address, linkage_name, symbol) tuples.
+            Empty list if there are no changes in source code.
         """
         file_with_line_numbers = self.get_file_with_line_numbers()
         if not file_with_line_numbers:
-            return {}
-        return self.run_query(file_with_line_numbers)
+            return []
+        if line_expansion_radius > 0:
+            file_with_line_numbers = self.expand_line_numbers(
+                file_with_line_numbers, line_expansion_radius
+            )
+        return self.run_query(
+            file_with_line_numbers, bidirectional=bidirectional
+        )
 
 
 if __name__ == "__main__":
@@ -174,9 +244,9 @@ if __name__ == "__main__":
     output = dts.get_map_line_to_symbol()
     symbols = set()
     print("\n")
-    for (file, line), (address, linkage_name, symbol) in output.items():
+    for file, line, address, linkage_name, symbol in output:
         if not address and not linkage_name:
             print(f"{file}:{line} ->\n     NOT RESOLVED\n")
-        if symbol not in symbols:
+        if symbol and symbol not in symbols:
             symbols.add(symbol)
             print(f"{file}:{line} ->\n     {symbol}\n")
