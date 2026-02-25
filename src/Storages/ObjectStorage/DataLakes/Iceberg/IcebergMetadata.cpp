@@ -33,6 +33,7 @@
 #include <Databases/DataLake/Common.h>
 #include <Disks/DiskType.h>
 #include <Core/ColumnsWithTypeAndName.h>
+#include <Core/ServerSettings.h>
 #include <Core/Settings.h>
 #include <Core/NamesAndTypes.h>
 #include <Databases/DataLake/ICatalog.h>
@@ -122,6 +123,11 @@ extern const SettingsBool allow_experimental_iceberg_compaction;
 extern const SettingsBool iceberg_delete_data_on_drop;
 }
 
+namespace ServerSetting
+{
+extern const ServerSettingsUInt64 iceberg_metadata_async_refresh_period;
+}
+
 namespace
 {
 String dumpMetadataObjectToString(const Poco::JSON::Object::Ptr & metadata_object)
@@ -192,7 +198,8 @@ std::pair<IcebergDataSnapshotPtr, TableStateSnapshot> IcebergMetadata::getReleva
         persistent_components.metadata_cache,
         context,
         log.get(),
-        persistent_components.table_uuid);
+        persistent_components.table_uuid,
+        false);
     return getState(context, metadata_file_path, metadata_version);
 }
 
@@ -244,15 +251,18 @@ try
         Context::getGlobalContextInstance()->getBackgroundContext(),
         log.get(),
         persistent_components.table_uuid,
-        0);
+        true);
 
-    LOG_INFO(getLogger("DDDBG"), "backgroundMetadataPrefetchedThread ... path={} uuid={} metadata.json={} version={}",
+    size_t period = Context::getGlobalContextInstance()->getBackgroundContext()->getServerSettings()[ServerSetting::iceberg_metadata_async_refresh_period];
+
+    LOG_INFO(getLogger("DDDBG"), "backgroundMetadataPrefetchedThread ... period={} path={} uuid={} metadata.json={} version={}",
              // static_cast<void*>(persistent_components.metadata_cache.get()),
+             period,
              persistent_components.table_path,
              persistent_components.table_uuid ? *(persistent_components.table_uuid) : "none",
              latest.path, latest.version);
 
-    background_metadata_prefetcher_task->scheduleAfter(2000);
+    background_metadata_prefetcher_task->scheduleAfter(period * 1000);
 }
 catch (...)
 {

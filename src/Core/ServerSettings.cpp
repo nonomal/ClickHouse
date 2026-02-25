@@ -2,6 +2,7 @@
 #include <Columns/IColumn.h>
 #include <Core/BaseSettings.h>
 #include <Core/BaseSettingsFwdMacrosImpl.h>
+#include <Core/Defines.h>
 #include <Core/ServerSettings.h>
 #include <IO/MMappedFileCache.h>
 #include <Interpreters/Cache/QueryConditionCache.h>
@@ -507,6 +508,8 @@ namespace
     DECLARE(UInt64, iceberg_metadata_files_cache_size, DEFAULT_ICEBERG_METADATA_CACHE_MAX_SIZE, "Maximum size of iceberg metadata cache in bytes. Zero means disabled.", 0) \
     DECLARE(UInt64, iceberg_metadata_files_cache_max_entries, DEFAULT_ICEBERG_METADATA_CACHE_MAX_ENTRIES, "Maximum size of iceberg metadata files cache in entries. Zero means disabled.", 0) \
     DECLARE(Double, iceberg_metadata_files_cache_size_ratio, DEFAULT_ICEBERG_METADATA_CACHE_SIZE_RATIO, "The size of the protected queue (in case of SLRU policy) in the iceberg metadata cache relative to the cache's total size.", 0) \
+    DECLARE(UInt64, iceberg_metadata_async_refresh_period, DEFAULT_ICEBERG_METADATA_ASYNC_REFRESH_PERIOD, "The period in seconds to asynchronously fetch the latest metadata from a remote iceberg catalog for each active table.", 0) \
+    DECLARE(UInt64, iceberg_metadata_async_fetcher_pool_size, DEFAULT_ICEBERG_METADATA_ASYNC_FETCHER_POOL_SIZE, "Size of thread pool to asynchronously fetch the latest metadata from a remote iceberg catalog; the pool is shared by all the active tables.", 0) \
     DECLARE(String, allowed_disks_for_table_engines, "", "List of disks allowed for use with Iceberg", 0) \
     DECLARE(String, vector_similarity_index_cache_policy, DEFAULT_VECTOR_SIMILARITY_INDEX_CACHE_POLICY, "Vector similarity index cache policy name.", 0) \
     DECLARE(UInt64, vector_similarity_index_cache_size, DEFAULT_VECTOR_SIMILARITY_INDEX_CACHE_MAX_SIZE, R"(Size of cache for vector similarity indexes. Zero means disabled.

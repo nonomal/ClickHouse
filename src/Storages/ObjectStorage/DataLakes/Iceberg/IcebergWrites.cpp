@@ -643,8 +643,7 @@ IcebergStorageSink::IcebergStorageSink(
         persistent_table_components.metadata_cache,
         context_,
         log.get(),
-        persistent_table_components.table_uuid,
-        0);
+        persistent_table_components.table_uuid);
 
     metadata = getMetadataJSONObject(
         metadata_path,
@@ -904,8 +903,7 @@ bool IcebergStorageSink::initializeMetadata()
                 persistent_table_components.metadata_cache,
                 context,
                 getLogger("IcebergWrites").get(),
-                persistent_table_components.table_uuid,
-                0);
+                persistent_table_components.table_uuid);
 
             LOG_DEBUG(log, "Rereading metadata file {} with version {}", metadata_path, last_version);
 

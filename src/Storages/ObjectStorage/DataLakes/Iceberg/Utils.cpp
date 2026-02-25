@@ -32,6 +32,7 @@
 #include <Poco/UUID.h>
 #include <Poco/UUIDGenerator.h>
 #include <Common/DateLUT.h>
+#include <Common/logger_useful.h>
 #include <Core/ColumnWithTypeAndName.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Disks/IStoragePolicy.h>
@@ -85,6 +86,7 @@ namespace ProfileEvents
 
 namespace DB::Setting
 {
+    extern const SettingsUInt64 iceberg_metadata_staleness_seconds;
     extern const SettingsUInt64 output_format_compression_level;
 }
 
@@ -995,7 +997,7 @@ static MetadataFileWithInfo getLatestMetadataFileAndVersion(
     const ContextPtr & local_context,
     std::optional<String> table_uuid,
     bool use_table_uuid_for_metadata_file_selection,
-    size_t tolerated_staleness_in_seconds)
+    bool force_fetch_latest_metadata)
 {
     auto load_fn = [&]()
     {
@@ -1094,12 +1096,26 @@ static MetadataFileWithInfo getLatestMetadataFileAndVersion(
         return MetadataFileWithInfo{latest_metadata_file_info.version, latest_metadata_file_info.path, getCompressionMethodFromMetadataFile(latest_metadata_file_info.path)};
     };
 
+    size_t tolerated_staleness_in_seconds = static_cast<size_t>(local_context->getSettingsRef()[Setting::iceberg_metadata_staleness_seconds]);
+    LOG_INFO(getLogger("DDDBG"), "getLatest: path={} staleness={} force={}", table_uuid ? *table_uuid : table_path, tolerated_staleness_in_seconds, force_fetch_latest_metadata);
+
+    if (force_fetch_latest_metadata)
+        tolerated_staleness_in_seconds = 0;
+
     if (metadata_cache)
     {
         if (table_uuid.has_value())
-            return metadata_cache->getOrSetLatestMetadataVersion(*table_uuid, load_fn, tolerated_staleness_in_seconds)->latest_metadata;
+            return metadata_cache->getOrSetLatestMetadataVersion(
+                *table_uuid,
+                load_fn,
+                tolerated_staleness_in_seconds
+            )->latest_metadata;
         else
-            return metadata_cache->getOrSetLatestMetadataVersion(table_path, load_fn, tolerated_staleness_in_seconds)->latest_metadata;
+            return metadata_cache->getOrSetLatestMetadataVersion(
+                table_path,
+                load_fn,
+                tolerated_staleness_in_seconds
+            )->latest_metadata;
     }
     return load_fn();
 }
@@ -1131,7 +1147,7 @@ MetadataFileWithInfo getLatestOrExplicitMetadataFileAndVersion(
     const ContextPtr & local_context,
     Poco::Logger * log,
     const std::optional<String> & table_uuid,
-    size_t tolerated_staleness_in_seconds)
+    bool force_fetch_latest_metadata)
 {
     if (data_lake_settings[DataLakeStorageSetting::iceberg_metadata_file_path].changed)
     {
@@ -1167,7 +1183,7 @@ MetadataFileWithInfo getLatestOrExplicitMetadataFileAndVersion(
             explicit_table_uuid,
             table_path);
         return getLatestMetadataFileAndVersion(
-            object_storage, table_path, data_lake_settings, metadata_cache, local_context, normalizeUuid(explicit_table_uuid), true, tolerated_staleness_in_seconds);
+            object_storage, table_path, data_lake_settings, metadata_cache, local_context, normalizeUuid(explicit_table_uuid), true, force_fetch_latest_metadata);
     }
     else if (data_lake_settings[DataLakeStorageSetting::iceberg_use_version_hint].value)
     {
@@ -1191,7 +1207,7 @@ MetadataFileWithInfo getLatestOrExplicitMetadataFileAndVersion(
     else
     {
         return getLatestMetadataFileAndVersion(
-            object_storage, table_path, data_lake_settings, metadata_cache, local_context, table_uuid, false, tolerated_staleness_in_seconds);
+            object_storage, table_path, data_lake_settings, metadata_cache, local_context, table_uuid, false, force_fetch_latest_metadata);
     }
 }
 

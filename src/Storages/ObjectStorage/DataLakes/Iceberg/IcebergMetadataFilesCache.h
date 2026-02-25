@@ -17,6 +17,7 @@
 namespace ProfileEvents
 {
     extern const Event IcebergMetadataFilesCacheMisses;
+    extern const Event IcebergMetadataFilesCacheStaleMisses;
     extern const Event IcebergMetadataFilesCacheHits;
     extern const Event IcebergMetadataFilesCacheWeightLost;
 }
@@ -225,6 +226,10 @@ public:
                     /// the cached element is found and it's not stale accurding to our expectation
                     ProfileEvents::increment(ProfileEvents::IcebergMetadataFilesCacheHits);
                     return cell;
+                }
+                else
+                {
+                    ProfileEvents::increment(ProfileEvents::IcebergMetadataFilesCacheStaleMisses);
                 }
             }
         }

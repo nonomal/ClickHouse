@@ -88,7 +88,7 @@ MetadataFileWithInfo getLatestOrExplicitMetadataFileAndVersion(
     const ContextPtr & local_context,
     Poco::Logger * log,
     const std::optional<String> & table_uuid,
-    size_t tolerated_staleness_in_seconds = 3);
+    bool force_fetch_latest_metadata = true);
 
 std::pair<Poco::JSON::Object::Ptr, Int32> parseTableSchemaV1Method(const Poco::JSON::Object::Ptr & metadata_object);
 std::pair<Poco::JSON::Object::Ptr, Int32> parseTableSchemaV2Method(const Poco::JSON::Object::Ptr & metadata_object);
