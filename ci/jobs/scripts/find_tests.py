@@ -3,6 +3,7 @@ import ast
 import os
 import re
 import sys
+from math import log2
 from pathlib import Path
 
 sys.path.append("./")
@@ -50,6 +51,7 @@ FAILED_TESTS_QUERY = """ \
 class Targeting:
     INTEGRATION_JOB_TYPE = "Integration"
     STATELESS_JOB_TYPE = "Stateless"
+    AST_FUZZER_JOB_TYPE = "AST fuzzer"
 
     def __init__(self, info: Info):
         self.info = info
@@ -57,6 +59,8 @@ class Targeting:
             self.job_type = self.STATELESS_JOB_TYPE
         elif "integration" in info.job_name.lower():
             self.job_type = self.INTEGRATION_JOB_TYPE
+        elif "ast fuzzer" in info.job_name.lower():
+            self.job_type = self.AST_FUZZER_JOB_TYPE
         else:
             self.job_type = None
 
@@ -226,52 +230,101 @@ class Targeting:
 
         return map_file_line_to_test
 
-    def get_most_relevant_tests(self, binary_path, max_tests_per_symbol=100):
+    def get_most_relevant_tests(self, binary_path, max_tests=500):
         """
-        1. Makes a best effort to get changed symbols by reading the PR diff and the ClickHouse binary DWARF.
-        2. Gets a list of tests that cover each found symbol from the coverage database.
-        3. Skips symbols with more than 'max_tests_per_symbol' tests (too common code).
-        4. Returns the unique tests and a Result with info about the findings.
+        1. Get changed symbols from diff + DWARF.
+        2. Get tests covering each symbol from the coverage DB.
+        3. Score every candidate test using IDF weighting across all changed
+           symbols: weight(symbol) = 1 / log2(max(test_count, 2)).
+           Tests covering rare symbols score high; tests covering multiple
+           changed symbols accumulate score from each.
+        4. Return top max_tests tests ranked by score.
         """
 
         file_line_to_symbol_tests = self.get_map_file_line_to_symbol_tests(binary_path)
         not_resolved_file_lines = {}
-        resolved_file_lines = {}
-        symbols_to_tests = {}
-        selected_tests = set()
+        resolved_symbols = {}
 
         for (file_, line_), (symbol, tests) in file_line_to_symbol_tests.items():
             if not tests:
-                if (file_, line_) not in not_resolved_file_lines:
-                    not_resolved_file_lines[(file_, line_)] = []
                 not_resolved_file_lines[(file_, line_)] = symbol
             else:
-                if symbol in symbols_to_tests:
-                    continue
-                symbols_to_tests[symbol] = tests
-                resolved_file_lines[(file_, line_)] = (symbol, tests)
+                if symbol not in resolved_symbols:
+                    resolved_symbols[symbol] = (file_, line_, tests)
 
-        info = "Tests not found for lines:\n"
-        for (file_, line), symbol in not_resolved_file_lines.items():
-            info += f"  {file_}:{line} -> symbol: {symbol[:70] + '...' if symbol else 'NOT FOUND'}\n"
-        info = "Tests found for lines:\n"
-        if not resolved_file_lines:
-            info += "  No updates in source code\n"
-        else:
-            for (file_, line), (symbol, tests) in resolved_file_lines.items():
-                info += f"  {file_}:{line} -> symbol: {symbol[:70]}...\n"
-                if len(tests) > max_tests_per_symbol:
-                    info += f"    skipping {len(tests)} tests (too common code)\n"
-                else:
-                    selected_tests.update(tests)
-            for test in tests[:10]:
-                info += f"  - {test}\n"
-            if len(tests) > 10:
-                info += f"    ... and {len(tests) - 10} more tests\n"
+        info = (
+            f"Coverage targeting: changed_lines={len(file_line_to_symbol_tests)}, "
+            f"resolved_symbols={len(resolved_symbols)}, "
+            f"unresolved_lines={len(not_resolved_file_lines)}, "
+            f"max_tests={max_tests}\n"
+        )
+
+        info += "Lines without coverage data:\n"
+        for (file_, line_), symbol in not_resolved_file_lines.items():
+            sym_str = (symbol[:70] + "...") if symbol else "NOT FOUND"
+            info += f"  {file_}:{line_} -> symbol: {sym_str}\n"
+
+        info += "Resolved symbols:\n"
+        if not resolved_symbols:
+            info += "  (none — no source code changes resolved to symbols)\n"
+            info += "Total unique tests: 0\n"
+            return [], Result(
+                name="tests found by coverage",
+                status=Result.StatusExtended.OK,
+                info=info,
+            )
+
+        test_scores = {}
+        test_symbols = {}
+
+        for symbol, (file_, line_, tests) in resolved_symbols.items():
+            n_tests = len(tests)
+            weight = 1.0 / log2(max(n_tests, 2))
+            info += (
+                f"  {file_}:{line_} -> {symbol[:70]}...\n"
+                f"    covering_tests={n_tests}, idf_weight={weight:.4f}\n"
+            )
+            for test in tests:
+                if not test:
+                    continue
+                test_scores[test] = test_scores.get(test, 0.0) + weight
+                if test not in test_symbols:
+                    test_symbols[test] = []
+                test_symbols[test].append(symbol)
+
+        ranked_tests = sorted(
+            test_scores.keys(),
+            key=lambda t: (-len(test_symbols[t]), -test_scores[t], t),
+        )
+        selected_tests = ranked_tests[:max_tests]
+
+        info += "Scoring summary:\n"
+        info += f"  Candidate tests (union of all symbols): {len(test_scores)}\n"
+        info += f"  Selected (top {max_tests}): {len(selected_tests)}\n"
+        if selected_tests:
+            top = selected_tests[0]
+            bot = selected_tests[-1]
+            info += (
+                f"  Highest: symbols_covered={len(test_symbols[top])}, "
+                f"score={test_scores[top]:.4f} ({top})\n"
+            )
+            info += (
+                f"  Lowest:  symbols_covered={len(test_symbols[bot])}, "
+                f"score={test_scores[bot]:.4f} ({bot})\n"
+            )
+        info += "Selected tests:\n"
+        for test in selected_tests[:20]:
+            sc = test_scores[test]
+            ns = len(test_symbols[test])
+            info += f"  - {test}  (symbols={ns}, score={sc:.4f})\n"
+        if len(selected_tests) > 20:
+            info += f"    ... and {len(selected_tests) - 20} more\n"
         info += f"Total unique tests: {len(selected_tests)}\n"
-        selected_tests = list(selected_tests)
-        return selected_tests, Result(
-            name="tests found by coverage", status=Result.StatusExtended.OK, info=info
+
+        return list(selected_tests), Result(
+            name="tests found by coverage",
+            status=Result.StatusExtended.OK,
+            info=info,
         )
 
     def get_all_relevant_tests_with_info(self, ch_path):
@@ -289,8 +342,8 @@ class Targeting:
         tests.update(previously_failed_tests)
         results.append(result)
 
-        # TODO: Add coverage supoort for Integration tests
-        if self.job_type == self.STATELESS_JOB_TYPE:
+        # TODO: Add coverage support for Integration tests
+        if self.job_type in (self.STATELESS_JOB_TYPE, self.AST_FUZZER_JOB_TYPE):
             try:
                 covering_tests, result = self.get_most_relevant_tests(ch_path)
                 tests.update(covering_tests)
