@@ -13,7 +13,7 @@
 #include <Compression/CompressedWriteBuffer.h>
 #include <Common/re2.h>
 #include <Access/Credentials.h>
-
+#include <Common/OpenTelemetryTraceContext.h>
 #include <Server/HTTPResponseHeaderWriter.h>
 
 namespace CurrentMetrics
@@ -150,7 +150,8 @@ private:
         HTTPServerResponse & response,
         Output & used_output,
         CurrentThread::QueryScope & query_scope,
-        const ProfileEvents::Event & write_event);
+        const ProfileEvents::Event & write_event,
+        OpenTelemetry::TracingContextHolderPtr & thread_trace_context);
 
     bool trySendExceptionToClient(
         int exception_code,

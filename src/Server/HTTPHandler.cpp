@@ -186,7 +186,8 @@ void HTTPHandler::processQuery(
     HTTPServerResponse & response,
     Output & used_output,
     CurrentThread::QueryScope & query_scope,
-    const ProfileEvents::Event & write_event)
+    const ProfileEvents::Event & write_event,
+    OpenTelemetry::TracingContextHolderPtr & thread_trace_context)
 {
     using namespace Poco::Net;
 
@@ -588,6 +589,12 @@ void HTTPHandler::processQuery(
     {
         releaseOrCloseSession(session_id, close_session);
 
+        if (thread_trace_context)
+        {
+            thread_trace_context->root_span.addAttribute("clickhouse.http_status", response.getStatus());
+            thread_trace_context.reset();
+        }
+
         /// Flush all the data from one buffer to another, to track
         /// NetworkSendElapsedMicroseconds/NetworkSendBytes from the query
         /// context
@@ -693,11 +700,6 @@ void HTTPHandler::handleRequest(HTTPServerRequest & request, HTTPServerResponse 
     bool with_stacktrace = false;
 
     OpenTelemetry::TracingContextHolderPtr thread_trace_context;
-    SCOPE_EXIT({
-        // make sure the response status is recorded
-        if (thread_trace_context)
-            thread_trace_context->root_span.addAttribute("clickhouse.http_status", response.getStatus());
-    });
 
     try
     {
@@ -757,7 +759,7 @@ void HTTPHandler::handleRequest(HTTPServerRequest & request, HTTPServerResponse 
                             "is no Content-Length header for POST request");
         }
 
-        processQuery(request, params, response, used_output, query_scope, write_event);
+        processQuery(request, params, response, used_output, query_scope, write_event, thread_trace_context);
         if (request_credentials)
             LOG_DEBUG(log, "Authentication in progress...");
         else
