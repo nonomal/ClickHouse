@@ -158,9 +158,9 @@ private:
 
     /// TODO: reconsider location & initialization of it - it's temp now
     /// TODO: think whether possible to run a single prefetcher per multiple tables - if it's safe also
-    BackgroundSchedulePoolTaskHolder background_metadata_prefetcher_task;
+    BackgroundSchedulePoolTaskHolder background_metadata_refresher_task;
 
-    void backgroundMetadataPrefetcherThread();
+    void backgroundMetadataRefresherThread();
 };
 }
 

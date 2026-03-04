@@ -89,6 +89,7 @@ namespace DataLakeStorageSetting
 {
 extern const DataLakeStorageSettingsString iceberg_metadata_file_path;
 extern const DataLakeStorageSettingsString iceberg_metadata_table_uuid;
+extern const DataLakeStorageSettingsUInt32 iceberg_metadata_async_refresh_period_ms;
 extern const DataLakeStorageSettingsBool iceberg_recent_metadata_file_by_last_updated_ms_field;
 extern const DataLakeStorageSettingsBool iceberg_use_version_hint;
 extern const DataLakeStorageSettingsNonZeroUInt64 iceberg_format_version;
@@ -123,11 +124,6 @@ extern const SettingsBool allow_experimental_iceberg_compaction;
 extern const SettingsBool iceberg_delete_data_on_drop;
 }
 
-namespace ServerSetting
-{
-extern const ServerSettingsUInt64 iceberg_metadata_async_refresh_period;
-}
-
 namespace
 {
 String dumpMetadataObjectToString(const Poco::JSON::Object::Ptr & metadata_object)
@@ -156,7 +152,7 @@ Iceberg::PersistentTableComponents IcebergMetadata::initializePersistentTableCom
     StorageObjectStorageConfigurationPtr configuration, IcebergMetadataFilesCachePtr cache_ptr, ContextPtr context_)
 {
     const auto [metadata_version, metadata_file_path, compression_method]
-        = getLatestOrExplicitMetadataFileAndVersion(object_storage, configuration->getPathForRead().path, configuration->getDataLakeSettings(), cache_ptr, context_, log.get(), std::nullopt);
+        = getLatestOrExplicitMetadataFileAndVersion(object_storage, configuration->getPathForRead().path, configuration->getDataLakeSettings(), cache_ptr, context_, log.get(), std::nullopt, false);
     LOG_DEBUG(log, "Latest metadata file path is {}, version {}", metadata_file_path, metadata_version);
     auto metadata_object
         = getMetadataJSONObject(metadata_file_path, object_storage, cache_ptr, context_, log, compression_method, std::nullopt);
@@ -217,30 +213,30 @@ IcebergMetadata::IcebergMetadata(
 
     /// TODO: wrongly placed, temp for now - use startup/shutdown
     /// TODO: use its own pool instead of common schedule pool
-    if (cache_ptr)
+    if (cache_ptr && data_lake_settings[DataLakeStorageSetting::iceberg_metadata_async_refresh_period_ms] != 0)
     {
-        background_metadata_prefetcher_task = context_->getSchedulePool().createTask(
+        background_metadata_refresher_task = context_->getSchedulePool().createTask(
             StorageID::createEmpty(),
             "wtf",
             [this]
             {
-                this->backgroundMetadataPrefetcherThread();
+                this->backgroundMetadataRefresherThread();
             }
         );
         /// TODO: move to startup
-        background_metadata_prefetcher_task->activateAndSchedule();
+        background_metadata_refresher_task->activateAndSchedule();
     }
 }
 
 IcebergMetadata::~IcebergMetadata()
 {
     /// TODO: wrongly placed, temp for now - use startup/shutdown
-    if (background_metadata_prefetcher_task)
-        background_metadata_prefetcher_task->deactivate();
+    if (background_metadata_refresher_task)
+        background_metadata_refresher_task->deactivate();
 }
 
 /// TODO: in the end, schedule in a pool (every Metadata schedules in a pool, instead of running its own)
-void IcebergMetadata::backgroundMetadataPrefetcherThread()
+void IcebergMetadata::backgroundMetadataRefresherThread()
 try
 {
     MetadataFileWithInfo latest = getLatestOrExplicitMetadataFileAndVersion(
@@ -253,16 +249,16 @@ try
         persistent_components.table_uuid,
         true);
 
-    size_t period = Context::getGlobalContextInstance()->getBackgroundContext()->getServerSettings()[ServerSetting::iceberg_metadata_async_refresh_period];
+    size_t period = data_lake_settings[DataLakeStorageSetting::iceberg_metadata_async_refresh_period_ms];
 
-    LOG_INFO(getLogger("DDDBG"), "backgroundMetadataPrefetchedThread ... period={} path={} uuid={} metadata.json={} version={}",
+    LOG_INFO(getLogger("DDDBG"), "backgroundMetadataRefresherThread ... period={} path={} uuid={} metadata.json={} version={}",
              // static_cast<void*>(persistent_components.metadata_cache.get()),
              period,
              persistent_components.table_path,
              persistent_components.table_uuid ? *(persistent_components.table_uuid) : "none",
              latest.path, latest.version);
 
-    background_metadata_prefetcher_task->scheduleAfter(period * 1000);
+    background_metadata_refresher_task->scheduleAfter(period);
 }
 catch (...)
 {

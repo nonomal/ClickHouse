@@ -1001,7 +1001,6 @@ static MetadataFileWithInfo getLatestMetadataFileAndVersion(
 {
     auto load_fn = [&]()
     {
-
         auto log = getLogger("IcebergMetadataFileResolver");
         MostRecentMetadataFileSelectionWay selection_way
             = data_lake_settings[DataLakeStorageSetting::iceberg_recent_metadata_file_by_last_updated_ms_field].value
@@ -1025,7 +1024,6 @@ static MetadataFileWithInfo getLatestMetadataFileAndVersion(
 
             if (need_all_metadata_files_parsing)
             {
-                /// TODO: WE'll SELF LOCK on the same MUTEX at 'getMetadataJSONObject'; let's keep it just make things compile, then needs to be separated
                 auto metadata_file_object = getMetadataJSONObject(
                     metadata_file_path, object_storage, metadata_cache, local_context, log, compression_method, table_uuid);
                 if (table_uuid.has_value() && use_table_uuid_for_metadata_file_selection)
