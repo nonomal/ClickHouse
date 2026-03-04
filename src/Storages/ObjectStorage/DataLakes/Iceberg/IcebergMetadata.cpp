@@ -239,15 +239,52 @@ IcebergMetadata::~IcebergMetadata()
 void IcebergMetadata::backgroundMetadataRefresherThread()
 try
 {
+    auto ctx = Context::getGlobalContextInstance()->getBackgroundContext();
+
     MetadataFileWithInfo latest = getLatestOrExplicitMetadataFileAndVersion(
         object_storage,
         persistent_components.table_path,
         data_lake_settings,
         persistent_components.metadata_cache,
-        Context::getGlobalContextInstance()->getBackgroundContext(),
+        ctx,
         log.get(),
         persistent_components.table_uuid,
         true);
+
+    /// Step 2: fetch and cache the metadata.json file content
+    auto metadata_object = getMetadataJSONObject(
+        latest.path,
+        object_storage,
+        persistent_components.metadata_cache,
+        ctx,
+        log,
+        latest.compression_method,
+        persistent_components.table_uuid);
+
+    /// Step 3: resolve current snapshot; empty tables have no snapshot — nothing more to warm up
+    if (metadata_object->has(f_current_snapshot_id))
+    {
+        auto current_snapshot_id = metadata_object->getValue<Int64>(f_current_snapshot_id);
+        if (current_snapshot_id >= 0)
+        {
+            /// Step 4: build the data snapshot — getIcebergDataSnapshot internally calls
+            /// getManifestList, which fetches the manifest-list Avro file and caches its entries
+            auto data_snapshot = getIcebergDataSnapshot(metadata_object, current_snapshot_id, ctx);
+
+            /// Step 5: warm up each individual manifest file
+            for (const auto & entry : data_snapshot->manifest_list_entries)
+            {
+                getManifestFile(
+                    object_storage,
+                    persistent_components,
+                    ctx,
+                    log,
+                    entry.manifest_file_path,
+                    entry.added_sequence_number,
+                    entry.added_snapshot_id);
+            }
+        }
+    }
 
     size_t period = data_lake_settings[DataLakeStorageSetting::iceberg_metadata_async_refresh_period_ms];
 
