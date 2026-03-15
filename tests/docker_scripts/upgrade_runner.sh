@@ -157,7 +157,7 @@ then
       old_settings.value AS old_value
   FROM new_settings
   LEFT JOIN old_settings ON new_settings.name = old_settings.name
-  WHERE (old_value IS NULL OR new_value != old_value) AND name != 'async_insert'
+  WHERE (old_value IS NULL OR new_value != old_value)
       AND (name NOT IN (
       SELECT arrayJoin(tupleElement(changes, 'name'))
       FROM
@@ -378,6 +378,7 @@ rg -Fav -e "Code: 236. DB::Exception: Cancelled merging parts" \
            -e "Mapping for table with UUID=1f474183-1403-4282-9309-21f6e3518dab already exists" \
            -e "Cannot parse projection test_projection" \
            -e "Key expressions cannot contain subqueries" \
+           -e "Expression must be deterministic but it contains non-deterministic part" \
     /test_output/clickhouse-server.upgrade.log \
     | grep -av -e "_repl_01111_.*Mapping for table with UUID" \
     | grep -Fa "<Error>" > /test_output/upgrade_error_messages.txt || true
