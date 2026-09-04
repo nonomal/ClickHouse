@@ -216,6 +216,7 @@ void collectTextIndexReadInfos(const ReadFromMergeTree * read_from_merge_tree_st
     /// other partitions/parts not in `parts_with_ranges`, disabling direct text index reads even when
     /// the queried parts have no on-the-fly updates for the index columns.
     NameSet all_updated_columns;
+    bool any_part_has_patches = false;
     for (const auto & part : unique_parts)
     {
         auto alter_conversions = MergeTreeData::getAlterConversionsForPart(part, mutations_snapshot, context
@@ -225,6 +226,23 @@ void collectTextIndexReadInfos(const ReadFromMergeTree * read_from_merge_tree_st
         );
         const auto & part_updated_columns = alter_conversions->getAllUpdatedColumns();
         all_updated_columns.insert(part_updated_columns.begin(), part_updated_columns.end());
+        any_part_has_patches |= alter_conversions->hasPatches();
+    }
+
+    /// A patch part is applied by the reader chain, which reads the patch key columns in its first
+    /// step and needs them there to match rows. A direct read makes that first step an index step,
+    /// whose reader produces exactly one column - the one synthesized from the index - and reads
+    /// nothing from the part, so the key columns cannot go there. Adding them anyway makes
+    /// `getIndexReadTaskForReadStep` hand the step to the main reader, which cannot produce the
+    /// index column, and the query silently answers no rows.
+    ///
+    /// A patch of an indexed column is already excluded by `canUseIndex` below, because
+    /// `AlterConversions::addPatchPart` records patched columns in `getAllUpdatedColumns` as well.
+    /// This covers the remaining case: a patch of a column that the index does not cover.
+    if (any_part_has_patches)
+    {
+        LOG_TRACE(logger, "Cannot use direct reading from text index. Reason: a part has a pending patch");
+        return;
     }
 
     for (const auto & index : indexes->skip_indexes.useful_indices)
