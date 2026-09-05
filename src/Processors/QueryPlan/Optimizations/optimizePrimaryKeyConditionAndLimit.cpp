@@ -1,9 +1,12 @@
 #include <Processors/QueryPlan/Optimizations/Optimizations.h>
+#include <Processors/QueryPlan/ArrayJoinStep.h>
 #include <Processors/QueryPlan/ExpressionStep.h>
 #include <Processors/QueryPlan/FilterStep.h>
 #include <Processors/QueryPlan/LimitStep.h>
 #include <Processors/QueryPlan/SourceStepWithFilter.h>
 #include <Processors/QueryPlan/ObjectFilterStep.h>
+
+#include <list>
 
 namespace DB::QueryPlanOptimizations
 {
@@ -32,26 +35,32 @@ void optimizePrimaryKeyConditionAndLimit(const Stack & stack)
     /// analysis when plan optimizations like mergeExpressions have not
     /// merged these steps into the filter.
     std::vector<const ActionsDAG *> expression_dags;
+    /// Owns the DAGs synthesized for ARRAY JOIN steps below; `expression_dags` points into it.
+    std::list<ActionsDAG> array_join_dags;
+    bool passed_array_join = false;
+
+    /// Compose a filter through the accumulated DAGs (in bottom-to-top order), so its column
+    /// references resolve to the physical columns of the source.
+    auto compose = [&](ActionsDAG filter_dag)
+    {
+        for (auto it = expression_dags.rbegin(); it != expression_dags.rend(); ++it)
+            filter_dag = ActionsDAG::merge((*it)->clone(), std::move(filter_dag));
+        return filter_dag;
+    };
 
     for (auto iter = stack.rbegin() + 1; iter != stack.rend(); ++iter)
     {
         if (auto * filter_step = typeid_cast<FilterStep *>(iter->node->step.get()))
         {
-            auto filter_dag = filter_step->getExpression().clone();
-            auto filter_column_name = filter_step->getFilterColumnName();
-
-            /// Compose filter through accumulated expression DAGs
-            /// (in bottom-to-top order). This resolves column identifiers
-            /// to their underlying expressions, enabling correct index
-            /// matching for ALIAS columns and renamed columns.
-            for (auto it = expression_dags.rbegin(); it != expression_dags.rend(); ++it)
-                filter_dag = ActionsDAG::merge((*it)->clone(), std::move(filter_dag));
-
-            source_step_with_filter->addFilter(std::move(filter_dag), filter_column_name);
+            /// This resolves column identifiers to their underlying expressions, enabling correct
+            /// index matching for ALIAS columns and renamed columns.
+            source_step_with_filter->addFilter(compose(filter_step->getExpression().clone()), filter_step->getFilterColumnName());
         }
         else if (auto * limit_step = typeid_cast<LimitStep *>(iter->node->step.get()))
         {
-            source_step_with_filter->setLimit(limit_step->getLimitForSorting());
+            /// An ARRAY JOIN changes the row count, so a LIMIT above it says nothing about the source.
+            if (!passed_array_join)
+                source_step_with_filter->setLimit(limit_step->getLimitForSorting());
             break;
         }
         else if (auto * expression_step = typeid_cast<ExpressionStep *>(iter->node->step.get()))
@@ -70,8 +79,38 @@ void optimizePrimaryKeyConditionAndLimit(const Stack & stack)
             expression_dags.push_back(&expression_step->getExpression());
             continue;
         }
+        else if (auto * array_join_step = typeid_cast<ArrayJoinStep *>(iter->node->step.get()))
+        {
+            /// Every output row of a plain ARRAY JOIN comes from a real element, so a condition on the element
+            /// holds for some element of the array: rewriting the element back to `arrayJoin(col)` gives the
+            /// indexes the shape they already read as `has(col, x)`. LEFT and unaligned joins also emit default
+            /// values for empty or short arrays, and such a row says nothing about the array.
+            if (array_join_step->isLeft() || array_join_step->isUnaligned())
+                break;
+
+            auto & dag = array_join_dags.emplace_back(array_join_step->getInputHeaders().front()->getNamesAndTypesList());
+            for (const auto & name : array_join_step->getColumns())
+            {
+                const auto & array = dag.findInOutputs(name);
+                /// The alias keeps the step's output name for the composition; the `arrayJoin(col)` node underneath
+                /// is what the index analysis names the atom by, so it can't be mistaken for the array column itself.
+                const auto & element = dag.addAlias(dag.addArrayJoin(array, {}), name);
+                for (auto & output : dag.getOutputs())
+                    if (output == &array)
+                        output = &element;
+            }
+            expression_dags.push_back(&dag);
+            passed_array_join = true;
+
+            /// A fused element filter runs inside the step; for the index it is a filter right above the join.
+            if (const auto * element_filter = array_join_step->getElementFilter())
+                source_step_with_filter->addFilter(compose(element_filter->clone()), array_join_step->getElementFilterColumnName());
+        }
         else if (auto * object_filter_step = typeid_cast<ObjectFilterStep *>(iter->node->step.get()))
         {
+            /// Not composed through the DAGs below, so above an ARRAY JOIN its column names would mean the elements.
+            if (passed_array_join)
+                break;
             source_step_with_filter->addFilter(object_filter_step->getExpression().clone(), object_filter_step->getFilterColumnName());
         }
         else
