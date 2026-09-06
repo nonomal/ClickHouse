@@ -27,6 +27,10 @@ CREATE VIEW v_inv SQL SECURITY INVOKER AS SELECT id, public_label FROM t;
 -- A trivial view over the one-shard, three-replica Distributed table: the analyzer can inline the body and
 -- read d3 directly (optimize_trivial_view_pushdown_to_distributed), so the custom key is shipped to the replicas.
 CREATE VIEW v_inv_d3 SQL SECURITY INVOKER AS SELECT id, public_label FROM d3;
+-- The view column secret_token shadows the denied column of d3. The custom key is shipped to the replicas as a
+-- filter over the columns of the Distributed table in both the pushdown and the non-pushdown path (the INVOKER
+-- body reads d3 as the invoker), so it is resolved against d3, not against the view, and must be denied in both.
+CREATE VIEW v_inv_d3_shadow SQL SECURITY INVOKER AS SELECT id, public_label, '' AS secret_token FROM d3;
 CREATE VIEW v_def SQL SECURITY DEFINER DEFINER = CURRENT_USER AS SELECT id, public_label FROM t;
 -- The view column secret_token shadows the denied table column: a custom key over it resolves on the view,
 -- and must not be re-evaluated over the table inside the DEFINER/NONE body.
@@ -50,6 +54,7 @@ GRANT SELECT(id, public_label) ON $DB.d TO $u_low;
 GRANT SELECT(id, public_label) ON $DB.d3 TO $u_low;
 GRANT SELECT ON $DB.v_inv TO $u_low;
 GRANT SELECT ON $DB.v_inv_d3 TO $u_low;
+GRANT SELECT ON $DB.v_inv_d3_shadow TO $u_low;
 GRANT SELECT(alias_col) ON $DB.t TO $u_alias;
 GRANT SELECT ON $DB.v_def TO $u_view;
 GRANT SELECT ON $DB.v_def_shadow TO $u_view;
@@ -58,18 +63,18 @@ GRANT SELECT ON $DB.v_def_prof TO $u_view;
 GRANT SELECT(id, public_label) ON $DB.pv_def TO $u_low;
 "
 
-err_file="${CLICKHOUSE_TMP}/${CLICKHOUSE_TEST_UNIQUE_NAME}.err"
-
-# On success print only stdout; on failure print the error code name from the trailing (CODE_NAME) token.
+# Every case is a separate query, so run them over HTTP: a client process per query is too slow under sanitizers.
+# On success print only the result; on failure print the error code name from the trailing (CODE_NAME) token.
 function run()
 {
     local user=$1
     local query=$2
     local out
-    if out=$($CLICKHOUSE_CLIENT --user "$user" --password password -q "$query" 2>"$err_file"); then
-        echo "$out"
+    out=$(${CLICKHOUSE_CURL} -sS "${CLICKHOUSE_URL}&user=${user}&password=password" --data-binary "$query")
+    if [[ "$out" == *"DB::Exception"* ]]; then
+        grep -oE '\([A-Z_]+\)' <<< "$out" | tail -1 | tr -d '()'
     else
-        grep -oE '\([A-Z_]+\)' "$err_file" | tail -1 | tr -d '()'
+        echo "$out"
     fi
 }
 
@@ -191,6 +196,12 @@ run "$u_low" "SELECT sum(c) FROM (SELECT count() AS c FROM v_inv_d3) SETTINGS en
 echo "-- analyzer=1: 34 trivial view over the replicas, no pushdown, custom key over denied column"
 run "$u_low" "SELECT sum(c) FROM (SELECT count() AS c FROM v_inv_d3) SETTINGS enable_analyzer=1, optimize_trivial_view_pushdown_to_distributed = 0, max_parallel_replicas = 3, allow_experimental_parallel_reading_from_replicas = 1, parallel_replicas_mode = 'custom_key_sampling', parallel_replicas_custom_key = 'secret_token = ''$T'''"
 
+echo "-- analyzer=1: 35 trivial view shadowing the denied column, pushdown, custom key over the shadowing column"
+run "$u_low" "SELECT sum(c) FROM (SELECT count() AS c FROM v_inv_d3_shadow) SETTINGS enable_analyzer=1, optimize_trivial_view_pushdown_to_distributed = 1, max_parallel_replicas = 3, allow_experimental_parallel_reading_from_replicas = 1, parallel_replicas_mode = 'custom_key_sampling', parallel_replicas_custom_key = 'secret_token = ''$T'''"
+
+echo "-- analyzer=1: 36 trivial view shadowing the denied column, no pushdown, custom key over the shadowing column"
+run "$u_low" "SELECT sum(c) FROM (SELECT count() AS c FROM v_inv_d3_shadow) SETTINGS enable_analyzer=1, optimize_trivial_view_pushdown_to_distributed = 0, max_parallel_replicas = 3, allow_experimental_parallel_reading_from_replicas = 1, parallel_replicas_mode = 'custom_key_sampling', parallel_replicas_custom_key = 'secret_token = ''$T'''"
+
 $CLICKHOUSE_CLIENT -n -q "
 DROP VIEW IF EXISTS pv_def;
 DROP VIEW IF EXISTS v_def_prof;
@@ -199,6 +210,7 @@ DROP VIEW IF EXISTS v_def_shadow;
 DROP VIEW IF EXISTS v_def;
 DROP VIEW IF EXISTS v_inv;
 DROP VIEW IF EXISTS v_inv_d3;
+DROP VIEW IF EXISTS v_inv_d3_shadow;
 DROP TABLE IF EXISTS d3;
 DROP TABLE IF EXISTS d;
 DROP TABLE IF EXISTS t;
@@ -206,4 +218,3 @@ DROP USER IF EXISTS $u_low, $u_alias, $u_view, $u_def;
 DROP SETTINGS PROFILE IF EXISTS $p_def;
 "
 
-rm -f "$err_file"
