@@ -275,6 +275,17 @@ static ASTPtr makeSelectFromTable(const StorageID & table_id, ASTs select_expres
     return query_ast;
 }
 
+/// The table the synthetic `SELECT <filter> FROM db.table` is resolved against: the first table of the query, with
+/// its alias and columns. Without it, `TreeRewriter` cannot resolve qualified names such as `db.table.column`
+/// or `alias.column`, while the same names are resolved in a `WHERE` predicate.
+static TablesWithColumns getTablesWithColumnsForFilter(const JoinedTables & joined_tables)
+{
+    const auto & tables_with_columns = joined_tables.tablesWithColumns();
+    if (tables_with_columns.empty())
+        return {};
+    return {tables_with_columns.front()};
+}
+
 /// Assumes `storage` is set and the table filter (row-level security) is not empty.
 static FilterDAGInfoPtr generateFilterActions(
     const StorageID & table_id,
@@ -283,6 +294,7 @@ static FilterDAGInfoPtr generateFilterActions(
     const StoragePtr & storage,
     const StorageSnapshotPtr & storage_snapshot,
     const StorageMetadataPtr & metadata_snapshot,
+    const TablesWithColumns & tables_with_columns,
     Names & prerequisite_columns,
     PreparedSetsPtr prepared_sets)
 try
@@ -313,7 +325,7 @@ try
     auto expr_list = query_ast->as<ASTSelectQuery &>().select();
 
     /// Using separate expression analyzer to prevent any possible alias injection
-    auto syntax_result = TreeRewriter(context).analyzeSelect(query_ast, TreeRewriterResult({}, storage, storage_snapshot));
+    auto syntax_result = TreeRewriter(context).analyzeSelect(query_ast, TreeRewriterResult({}, storage, storage_snapshot), {}, tables_with_columns);
     SelectQueryExpressionAnalyzer analyzer(query_ast, syntax_result, context, metadata_snapshot, {}, false, {}, prepared_sets);
     filter_info->actions = std::move(analyzer.simpleSelectActions()->dag);
 
@@ -475,10 +487,11 @@ void checkAccessRightsForSelect(
 
 /// Settings-provided filters are user-controlled expressions over table columns and need the same check as the query.
 void checkAccessRightsForFilter(const ContextPtr & context, const StorageID & table_id, const StoragePtr & storage,
-    const StorageSnapshotPtr & storage_snapshot, const StorageMetadataPtr & metadata_snapshot, const ASTPtr & filter_ast)
+    const StorageSnapshotPtr & storage_snapshot, const StorageMetadataPtr & metadata_snapshot,
+    const TablesWithColumns & tables_with_columns, const ASTPtr & filter_ast)
 {
     ASTPtr query_ast = makeSelectFromTable(table_id, {filter_ast->clone()});
-    auto syntax_result = TreeRewriter(context).analyzeSelect(query_ast, TreeRewriterResult({}, storage, storage_snapshot));
+    auto syntax_result = TreeRewriter(context).analyzeSelect(query_ast, TreeRewriterResult({}, storage, storage_snapshot), {}, tables_with_columns);
     checkAccessRightsForSelect(context, table_id, storage, metadata_snapshot, *syntax_result);
 }
 
@@ -1039,12 +1052,13 @@ InterpreterSelectQuery::InterpreterSelectQuery(
         if (storage)
         {
             query_info.filter_asts.clear();
+            const auto filter_tables_with_columns = getTablesWithColumnsForFilter(joined_tables);
 
             /// Fix source_header for filter actions.
             if (row_policy_filter && !row_policy_filter->isAlwaysTrue())
             {
                 row_policy_info = generateFilterActions(
-                    table_id, row_policy_filter->expression, context, storage, storage_snapshot, metadata_snapshot, required_columns,
+                    table_id, row_policy_filter->expression, context, storage, storage_snapshot, metadata_snapshot, filter_tables_with_columns, required_columns,
                     prepared_sets);
 
                 query_info.filter_asts.push_back(row_policy_filter->expression);
@@ -1053,7 +1067,7 @@ InterpreterSelectQuery::InterpreterSelectQuery(
             if (query_info.additional_filter_ast)
             {
                 additional_filter_info = generateFilterActions(
-                    table_id, query_info.additional_filter_ast, context, storage, storage_snapshot, metadata_snapshot, required_columns,
+                    table_id, query_info.additional_filter_ast, context, storage, storage_snapshot, metadata_snapshot, filter_tables_with_columns, required_columns,
                     prepared_sets);
 
                 additional_filter_info->do_remove_column = true;
@@ -1064,7 +1078,7 @@ InterpreterSelectQuery::InterpreterSelectQuery(
             if (parallel_replicas_custom_filter_ast)
             {
                 parallel_replicas_custom_filter_info = generateFilterActions(
-                        table_id, parallel_replicas_custom_filter_ast, context, storage, storage_snapshot, metadata_snapshot, required_columns,
+                        table_id, parallel_replicas_custom_filter_ast, context, storage, storage_snapshot, metadata_snapshot, filter_tables_with_columns, required_columns,
                         prepared_sets);
 
                 parallel_replicas_custom_filter_info->do_remove_column = true;
@@ -1156,16 +1170,19 @@ InterpreterSelectQuery::InterpreterSelectQuery(
         /// checked in ITableFunction::execute().
         checkAccessRightsForSelect(context, table_id, storage, metadata_snapshot, *syntax_analyzer_result);
 
+        const auto filter_tables_with_columns = getTablesWithColumnsForFilter(joined_tables);
+
         if (query_info.additional_filter_ast)
-            checkAccessRightsForFilter(context, table_id, storage, storage_snapshot, metadata_snapshot, query_info.additional_filter_ast);
+            checkAccessRightsForFilter(
+                context, table_id, storage, storage_snapshot, metadata_snapshot, filter_tables_with_columns, query_info.additional_filter_ast);
 
         if (parallel_replicas_custom_filter_ast)
             checkAccessRightsForFilter(
-                context, table_id, storage, storage_snapshot, metadata_snapshot, parallel_replicas_custom_filter_ast);
+                context, table_id, storage, storage_snapshot, metadata_snapshot, filter_tables_with_columns, parallel_replicas_custom_filter_ast);
 
         if (parallel_replicas_custom_key_ast_to_check)
             checkAccessRightsForFilter(
-                context, table_id, storage, storage_snapshot, metadata_snapshot, parallel_replicas_custom_key_ast_to_check);
+                context, table_id, storage, storage_snapshot, metadata_snapshot, filter_tables_with_columns, parallel_replicas_custom_key_ast_to_check);
 
         /// Remove limits for some tables in the `system` database.
         if (shouldIgnoreQuotaAndLimits(table_id) && (joined_tables.tablesCount() <= 1))

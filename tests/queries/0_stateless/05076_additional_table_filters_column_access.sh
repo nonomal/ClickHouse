@@ -157,31 +157,38 @@ run "$u_view" "SELECT count() FROM v_none_shadow SETTINGS enable_analyzer=$analy
 echo "-- analyzer=$analyzer: 25 definer view, custom key supplied by the invoker, activated by the definer's profile"
 run "$u_view" "SELECT count() FROM v_def_prof SETTINGS enable_analyzer=$analyzer, parallel_replicas_count = 2, parallel_replica_offset = 1, parallel_replicas_custom_key = 'secret_token = ''$T'''"
 
+# Table-qualified names are resolved against the table of the query, the same way as in a WHERE predicate.
+echo "-- analyzer=$analyzer: 26 filter over granted column, qualified key and expression"
+run "$u_low" "SELECT count() FROM t SETTINGS enable_analyzer=$analyzer, additional_table_filters = {'$DB.t': '$DB.t.public_label = ''customer_1'''}"
+
+echo "-- analyzer=$analyzer: 27 parallel replicas custom key (sampling) over granted column, qualified"
+run "$u_low" "SELECT count() FROM t SETTINGS enable_analyzer=$analyzer, cluster_for_parallel_replicas = 'test_shard_localhost', max_parallel_replicas = 2, allow_experimental_parallel_reading_from_replicas = 1, parallel_replicas_mode = 'custom_key_sampling', parallel_replicas_custom_key = '$DB.t.id', parallel_replicas_count = 2, parallel_replica_offset = 1"
+
 done
 
 # The analyzer resolves a parameterized view as a table function node wrapping the view storage, and the filter
 # access check has a dedicated branch for it. The legacy interpreter does not apply additional_table_filters
 # keyed by a parameterized view at all, so these cases are analyzer-only.
-echo "-- analyzer=1: 26 definer parameterized view, filter over denied view column"
+echo "-- analyzer=1: 28 definer parameterized view, filter over denied view column"
 run "$u_low" "SELECT count() FROM pv_def(min_id = 1) SETTINGS enable_analyzer=1, additional_table_filters = {'pv_def': 'secret_token = ''$T'''}"
 
-echo "-- analyzer=1: 27 definer parameterized view, qualified key, filter over denied view column"
+echo "-- analyzer=1: 29 definer parameterized view, qualified key, filter over denied view column"
 run "$u_low" "SELECT count() FROM pv_def(min_id = 1) SETTINGS enable_analyzer=1, additional_table_filters = {'$DB.pv_def': 'secret_token = ''$T'''}"
 
-echo "-- analyzer=1: 28 definer parameterized view, filter over granted view column"
+echo "-- analyzer=1: 30 definer parameterized view, filter over granted view column"
 run "$u_low" "SELECT count() FROM pv_def(min_id = 1) SETTINGS enable_analyzer=1, additional_table_filters = {'pv_def': 'public_label = ''customer_1'''}"
 
-echo "-- analyzer=1: 29 definer parameterized view, no filter"
+echo "-- analyzer=1: 31 definer parameterized view, no filter"
 run "$u_low" "SELECT count() FROM pv_def(min_id = 1) SETTINGS enable_analyzer=1"
 
 # The pushdown replaces the read from the view with a read from d3; the key must be checked against d3 there too.
-echo "-- analyzer=1: 30 trivial view over the replicas, pushdown, custom key over denied column"
+echo "-- analyzer=1: 32 trivial view over the replicas, pushdown, custom key over denied column"
 run "$u_low" "SELECT sum(c) FROM (SELECT count() AS c FROM v_inv_d3) SETTINGS enable_analyzer=1, optimize_trivial_view_pushdown_to_distributed = 1, max_parallel_replicas = 3, allow_experimental_parallel_reading_from_replicas = 1, parallel_replicas_mode = 'custom_key_sampling', parallel_replicas_custom_key = 'secret_token = ''$T'''"
 
-echo "-- analyzer=1: 31 trivial view over the replicas, pushdown, custom key over granted column"
+echo "-- analyzer=1: 33 trivial view over the replicas, pushdown, custom key over granted column"
 run "$u_low" "SELECT sum(c) FROM (SELECT count() AS c FROM v_inv_d3) SETTINGS enable_analyzer=1, optimize_trivial_view_pushdown_to_distributed = 1, max_parallel_replicas = 3, allow_experimental_parallel_reading_from_replicas = 1, parallel_replicas_mode = 'custom_key_sampling', parallel_replicas_custom_key = 'id'"
 
-echo "-- analyzer=1: 32 trivial view over the replicas, no pushdown, custom key over denied column"
+echo "-- analyzer=1: 34 trivial view over the replicas, no pushdown, custom key over denied column"
 run "$u_low" "SELECT sum(c) FROM (SELECT count() AS c FROM v_inv_d3) SETTINGS enable_analyzer=1, optimize_trivial_view_pushdown_to_distributed = 0, max_parallel_replicas = 3, allow_experimental_parallel_reading_from_replicas = 1, parallel_replicas_mode = 'custom_key_sampling', parallel_replicas_custom_key = 'secret_token = ''$T'''"
 
 $CLICKHOUSE_CLIENT -n -q "
