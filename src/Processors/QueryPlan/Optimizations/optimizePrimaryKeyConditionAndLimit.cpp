@@ -19,13 +19,6 @@ void optimizePrimaryKeyConditionAndLimit(const Stack & stack)
     if (!source_step_with_filter)
         return;
 
-    const auto & storage_prewhere_info = source_step_with_filter->getPrewhereInfo();
-    const auto & storage_row_level_filter = source_step_with_filter->getRowLevelFilter();
-    if (storage_row_level_filter)
-        source_step_with_filter->addFilter(storage_row_level_filter->actions.clone(), storage_row_level_filter->column_name);
-    if (storage_prewhere_info)
-        source_step_with_filter->addFilter(storage_prewhere_info->prewhere_actions.clone(), storage_prewhere_info->prewhere_column_name);
-
     /// Collect ExpressionStep DAGs encountered while walking up the plan.
     /// When a filter references columns produced by expressions (e.g., ALIAS
     /// columns computed in "Compute alias columns" step, or renamed in
@@ -47,11 +40,23 @@ void optimizePrimaryKeyConditionAndLimit(const Stack & stack)
         return filter_dag;
     };
 
+    const auto & storage_prewhere_info = source_step_with_filter->getPrewhereInfo();
+    const auto & storage_row_level_filter = source_step_with_filter->getRowLevelFilter();
+    if (storage_row_level_filter)
+        source_step_with_filter->addFilter(storage_row_level_filter->actions.clone(), storage_row_level_filter->column_name);
+    if (storage_prewhere_info)
+    {
+        source_step_with_filter->addFilter(storage_prewhere_info->prewhere_actions.clone(), storage_prewhere_info->prewhere_column_name);
+        /// Prewhere and filters may also compute columns that the steps above refer to.
+        expression_dags.push_back(&storage_prewhere_info->prewhere_actions);
+    }
+
     for (auto iter = stack.rbegin() + 1; iter != stack.rend(); ++iter)
     {
         if (auto * filter_step = typeid_cast<FilterStep *>(iter->node->step.get()))
         {
             source_step_with_filter->addFilter(compose(filter_step->getExpression().clone()), filter_step->getFilterColumnName());
+            expression_dags.push_back(&filter_step->getExpression());
         }
         else if (auto * limit_step = typeid_cast<LimitStep *>(iter->node->step.get()))
         {

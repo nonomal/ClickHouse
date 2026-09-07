@@ -21,6 +21,11 @@ SELECT count() FROM t_aj_index ARRAY JOIN tags AS t WHERE t IN ('tag_42') SETTIN
 SELECT count() > 0 FROM (EXPLAIN indexes = 1 SELECT count() FROM t_aj_index WHERE arrayJoin(tags) = 'tag_42' SETTINGS query_plan_lower_array_join_function = 1) WHERE explain ILIKE '%Granules: 2/13%';
 SELECT count() FROM t_aj_index WHERE arrayJoin(tags) = 'tag_42' SETTINGS query_plan_lower_array_join_function = 1;
 
+-- a passenger conjunct pushed below the join must not hide the element one from the index
+SELECT count() > 0 FROM (EXPLAIN indexes = 1 SELECT count() FROM t_aj_index ARRAY JOIN tags AS t WHERE t IN ('tag_42') AND id > 40) WHERE explain ILIKE '%Granules: 2/13%';
+SELECT count() > 0 FROM (EXPLAIN indexes = 1 SELECT count() FROM t_aj_index WHERE arrayJoin(tags) = 'tag_42' AND id > 40 SETTINGS query_plan_lower_array_join_function = 1) WHERE explain ILIKE '%Granules: 2/13%';
+SELECT count() FROM t_aj_index ARRAY JOIN tags AS t WHERE t IN ('tag_42') AND id > 40;
+
 -- LEFT pads empty arrays with defaults, so no index
 SELECT count() FROM (EXPLAIN indexes = 1 SELECT count() FROM t_aj_index LEFT ARRAY JOIN tags AS t WHERE t IN ('tag_42')) WHERE explain ILIKE '%Name: idx_tags%';
 
