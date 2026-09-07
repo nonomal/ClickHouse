@@ -11,6 +11,8 @@ INSERT INTO t_rf_right SELECT number * 2 FROM numbers(1000000);
 SET enable_join_runtime_filters = 1, join_algorithm = 'parallel_hash', collect_hash_table_stats_during_joins = 1,
     join_runtime_filter_size_from_hash_table_stats = 1, join_runtime_bloom_filter_max_ratio_of_set_bits = 0.05,
     query_plan_join_swap_table = 0;
+-- The hash table statistics are keyed by the join order optimization, which assigns no key when it is disabled.
+SET query_plan_optimize_join_order_limit = 10, query_plan_optimize_join_order_randomize = 0;
 
 -- The first run has no statistics: the filter is built and discarded as too dense. The second run has them.
 SELECT count() FROM t_rf_left SEMI LEFT JOIN t_rf_right USING (k);
