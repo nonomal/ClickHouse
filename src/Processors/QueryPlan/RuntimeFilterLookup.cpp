@@ -347,11 +347,13 @@ ApproximateRuntimeFilter::ApproximateRuntimeFilter(
     UInt64 exact_values_limit_,
     UInt64 bloom_filter_hash_functions_,
     Float64 max_ratio_of_set_bits_in_bloom_filter_,
-    std::optional<UInt64> distinct_keys_hint_)
+    std::optional<UInt64> distinct_keys_hint_,
+    bool distinct_keys_hint_matches_filter_key_)
     : RuntimeFilterBase(filters_to_merge_, filter_column_target_type_, pass_ratio_threshold_for_disabling_, blocks_to_skip_before_reenabling_, bytes_limit_, exact_values_limit_)
     , bloom_filter_hash_functions(bloom_filter_hash_functions_)
     , max_ratio_of_set_bits_in_bloom_filter(max_ratio_of_set_bits_in_bloom_filter_)
     , distinct_keys_hint(distinct_keys_hint_)
+    , distinct_keys_hint_matches_filter_key(distinct_keys_hint_matches_filter_key_)
     , bloom_filter(nullptr)
 {}
 
@@ -362,7 +364,7 @@ void ApproximateRuntimeFilter::insert(ColumnPtr values)
 
     if (is_fully_disabled)
     {
-        /// The values are not needed, but the envelope still serves the index analysis.
+        /// The exact (set) or approximate values (bloom filter) were disabled. Only update the minimum-maximum value envelope.
         updateRange(*values);
         return;
     }
@@ -387,6 +389,7 @@ void ApproximateRuntimeFilter::insert(ColumnPtr values)
 
 void ApproximateRuntimeFilter::finishInsertImpl()
 {
+    /// `disable` released the exact values that `Base::finishInsertImpl` would finish.
     if (is_fully_disabled)
         return;
 
@@ -409,7 +412,7 @@ void ApproximateRuntimeFilter::merge(const IRuntimeFilter * source)
     if (!source_typed)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Trying to merge runtime filters with different types");
 
-    /// A disabled side makes the union unknown; only the envelopes are merged then.
+    /// We can only merge the min-max value envelopes.
     if (source_typed->is_fully_disabled)
         disable();
 
@@ -530,14 +533,21 @@ void ApproximateRuntimeFilter::switchToBloomFilter()
         /// The filter size is capped (`MAX_STATS_SIZED_BLOOM_FILTER_BYTES`), so a build side with more distinct keys
         /// than fit at the maximal density is discarded by `checkBloomFilterWorthiness` after every build thread
         /// has filled and merged its copy. The hint tells that in advance: the expected fill rate of a filter of
-        /// `bits` bits after `keys * hashes` bit inserts is `1 - exp(-keys * hashes / bits)`.
-        const double predicted_fill_rate = -std::expm1(
-            -static_cast<double>(bloom_filter_hash_functions) * static_cast<double>(*distinct_keys_hint) / (static_cast<double>(bloom_filter_bytes) * 8.0));
-        if (predicted_fill_rate > max_ratio_of_set_bits_in_bloom_filter)
+        /// `bits` bits after `keys * hashes` bit inserts is `1 - exp(-keys * hashes / bits)`, see
+        /// https://en.wikipedia.org/wiki/Bloom_filter#Probability_of_false_positives.
+        /// The hint may be stale: the statistics keep a measured size until a run finds less than half of it
+        /// (`HashJoinEntry::shouldBeUpdated`), so the build is skipped only if half of the hinted keys saturate the filter.
+        if (distinct_keys_hint_matches_filter_key)
         {
-            ProfileEvents::increment(ProfileEvents::RuntimeFilterBloomFilterBuildsSkipped);
-            disable();
-            return;
+            const double least_distinct_keys = static_cast<double>(*distinct_keys_hint) / 2.0;
+            const double predicted_fill_rate = -std::expm1(
+                -static_cast<double>(bloom_filter_hash_functions) * least_distinct_keys / (static_cast<double>(bloom_filter_bytes) * 8.0));
+            if (predicted_fill_rate > max_ratio_of_set_bits_in_bloom_filter)
+            {
+                ProfileEvents::increment(ProfileEvents::RuntimeFilterBloomFilterBuildsSkipped);
+                disable();
+                return;
+            }
         }
     }
 

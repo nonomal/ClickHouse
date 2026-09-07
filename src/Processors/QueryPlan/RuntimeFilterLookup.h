@@ -287,7 +287,8 @@ public:
         UInt64 exact_values_limit_,
         UInt64 bloom_filter_hash_functions_,
         Float64 max_ratio_of_set_bits_in_bloom_filter_,
-        std::optional<UInt64> distinct_keys_hint_);
+        std::optional<UInt64> distinct_keys_hint_,
+        bool distinct_keys_hint_matches_filter_key_);
 
     void insert(ColumnPtr values) override;
 
@@ -304,7 +305,8 @@ private:
     void insertIntoBloomFilter(ColumnPtr values);
     void switchToBloomFilter();
 
-    /// Marks the filter as passing everything and frees the keys collected so far.
+    /// Marks the filter as passing everything. Also releases the exact values collected so far: they are
+    /// only a part of the build-side keys, and `getRecordedKeyValues` must not present them as all of them.
     void disable();
 
     /// Disables bloom filter if it is likely to have bad selectivity
@@ -314,6 +316,9 @@ private:
     const Float64 max_ratio_of_set_bits_in_bloom_filter = 0.7;
     /// Measured distinct build-side keys from prior statistics, used to choose the bloom filter size.
     const std::optional<UInt64> distinct_keys_hint;
+    /// Whether the filter key is the whole join key, so that the hint counts this filter's distinct keys.
+    /// A per-column filter of a multi-key join only gets an upper bound of them from the hint.
+    const bool distinct_keys_hint_matches_filter_key;
 
     BloomFilterPtr bloom_filter;
 };
