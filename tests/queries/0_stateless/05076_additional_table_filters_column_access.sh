@@ -95,8 +95,11 @@ run "$u_low" "SELECT count() FROM t SETTINGS enable_analyzer=$analyzer, addition
 echo "-- analyzer=$analyzer: 05 filter over alias of a denied column"
 run "$u_low" "SELECT count() FROM t SETTINGS enable_analyzer=$analyzer, additional_table_filters = {'t': 'alias_col = ''$T'''}"
 
+# A grant on an ALIAS column alone does not survive parallel replicas with a serialized query plan: the replica
+# checks the grant on the whole table (pre-existing behavior, reproducible with a plain `WHERE alias_col = ...`),
+# so pin parallel replicas off here to keep the case about the filter and not about the randomized settings.
 echo "-- analyzer=$analyzer: 06 filter over alias with alias grant"
-run "$u_alias" "SELECT count() FROM t SETTINGS enable_analyzer=$analyzer, additional_table_filters = {'t': 'alias_col = ''$T'''}"
+run "$u_alias" "SELECT count() FROM t SETTINGS enable_analyzer=$analyzer, enable_parallel_replicas = 0, additional_table_filters = {'t': 'alias_col = ''$T'''}"
 
 echo "-- analyzer=$analyzer: 07 filter over denied column with PREWHERE"
 run "$u_low" "SELECT count() FROM t PREWHERE id = 1 SETTINGS enable_analyzer=$analyzer, additional_table_filters = {'t': 'secret_token = ''$T'''}"
