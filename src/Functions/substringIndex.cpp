@@ -216,9 +216,14 @@ namespace
 
         static Int64 getClampedInt64(const IColumn & column, size_t index)
         {
-            if (column.getDataType() == TypeIndex::UInt64
-                && column.getUInt(index) > static_cast<UInt64>(std::numeric_limits<Int64>::max()))
-                return std::numeric_limits<Int64>::max();
+            if (column.getDataType() == TypeIndex::UInt64)
+            {
+                const UInt64 value = column.getUInt(index);
+                return value > static_cast<UInt64>(std::numeric_limits<Int64>::max())
+                    ? std::numeric_limits<Int64>::max()
+                    : static_cast<Int64>(value);
+            }
+
             return column.getInt(index);
         }
 
