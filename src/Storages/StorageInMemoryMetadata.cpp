@@ -146,9 +146,7 @@ UUID StorageInMemoryMetadata::getDefinerID(DB::ContextPtr context) const
 namespace
 {
 
-/// Custom-key parallel replicas are the only parallel replicas mode that evaluates a user-supplied expression
-/// over the table's columns. Turning parallel replicas off in the body context disables both the per-replica
-/// custom key filter and the initiator-side shipping of the body to the replicas.
+/// Custom-key parallel replicas evaluate a user-supplied expression over the body's columns; turn them off there.
 void dropParallelReplicasCustomKey(Context & body_context)
 {
     body_context.setSetting("allow_experimental_parallel_reading_from_replicas", Field(0));
@@ -210,26 +208,14 @@ ContextMutablePtr StorageInMemoryMetadata::getSQLSecurityOverriddenContext(Conte
     /// Invoker filters must not be injected into a DEFINER/NONE body.
     changed_settings.removeSetting("additional_table_filters");
 
-    /// `parallel_replicas_count` and `parallel_replica_offset` are internal settings: the initiator puts them on
-    /// the wire for every replica it fans a query out to, so only a secondary query may legitimately carry them.
-    /// On an initial query they can only have been supplied by the invoker, and they must not reach the body:
-    /// `MergeTreeDataSelectExecutor` splits any `SAMPLE` in the body into `parallel_replicas_count` pieces and
-    /// reads the piece numbered `parallel_replica_offset`, and that happens regardless of whether parallel
-    /// replicas are enabled. The invoker would then choose which slice of the definer's sample the body reads.
+    /// Internal initiator-set settings; an invoker-supplied pair would pick the slice of a `SAMPLE` in the body.
     if (context->getClientInfo().query_kind != ClientInfo::QueryKind::SECONDARY_QUERY)
     {
         changed_settings.removeSetting("parallel_replicas_count");
         changed_settings.removeSetting("parallel_replica_offset");
     }
 
-    /// The invoker's `parallel_replicas_custom_key` is an expression over the columns of the tables the body
-    /// reads. Inside the body it would be resolved and access-checked as the definer (or with no user at all),
-    /// which would let the invoker probe columns of the underlying tables through the row count. The outer
-    /// query has already applied the key to the view's own columns, so the body reads without it.
-    ///
-    /// The key is dropped both when the invoker's context has custom-key parallel replicas active and when the
-    /// query merely supplied the key: the activation settings may come from the definer's profile (or from the
-    /// default profile for `NONE`), and the invoker's key would then be evaluated in the body all the same.
+    /// Drop the invoker's key even if only the definer's profile activates it.
     const bool drop_custom_key = context->canUseParallelReplicasCustomKey() || changed_settings.tryGet("parallel_replicas_custom_key");
 
     if (sql_security_type == SQLSecurityType::NONE)
