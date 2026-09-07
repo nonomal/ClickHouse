@@ -102,16 +102,11 @@ NameSet checkAccessRights(
     const Names & column_names,
     const ContextPtr & query_context);
 
-/// Check column-level SELECT for the columns a settings-provided filter reads.
-/// Such filters are user-supplied, so unlike row policies they must not grant access to columns the user cannot select.
-void checkAccessRightsForFilter(const QueryTreeNodePtr & filter_query_tree,
-    const QueryTreeNodePtr & table_expression,
-    const ContextPtr & query_context);
-
-/// Build and resolve a filter expression against the table expression (used for row policies and settings-provided filters).
+/// Build and resolve a filter against the table expression; `check_access_rights` checks column-level SELECT for the columns it reads.
 QueryTreeNodePtr buildFilterQueryTree(ASTPtr filter_expression,
         const TableExpressionNodePtr & table_expression,
-        const ContextPtr & query_context);
+        const ContextPtr & query_context,
+        bool check_access_rights = false);
 
 /// Build filter for specific table_expression
 /// `check_access_rights`: check column-level SELECT for the columns the filter reads (for user-supplied filters).

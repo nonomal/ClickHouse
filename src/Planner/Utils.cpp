@@ -621,7 +621,7 @@ NameSet checkAccessRights(
     return {};
 }
 
-void checkAccessRightsForFilter(const QueryTreeNodePtr & filter_query_tree,
+static void checkAccessRightsForFilter(const QueryTreeNodePtr & filter_query_tree,
     const QueryTreeNodePtr & table_expression,
     const ContextPtr & query_context)
 {
@@ -679,7 +679,8 @@ void checkAccessRightsForFilter(const QueryTreeNodePtr & filter_query_tree,
 
 QueryTreeNodePtr buildFilterQueryTree(ASTPtr filter_expression,
         const TableExpressionNodePtr & table_expression,
-        const ContextPtr & query_context)
+        const ContextPtr & query_context,
+        bool check_access_rights)
 {
     /// If the filter expression is a standalone subquery (e.g. ROW POLICY
     /// USING (SELECT 1)), wrap it with notEquals(<subquery>, 0) so that
@@ -704,6 +705,9 @@ QueryTreeNodePtr buildFilterQueryTree(ASTPtr filter_expression,
     QueryAnalysisPass query_analysis_pass(table_expression);
     query_analysis_pass.run(filter_query_tree, query_context);
 
+    if (check_access_rights)
+        checkAccessRightsForFilter(filter_query_tree, table_expression, query_context);
+
     return filter_query_tree;
 }
 
@@ -714,10 +718,7 @@ FilterDAGInfo buildFilterInfo(ASTPtr filter_expression,
         bool check_access_rights)
 {
     const auto & query_context = planner_context->getQueryContext();
-    auto filter_query_tree = buildFilterQueryTree(std::move(filter_expression), table_expression, query_context);
-
-    if (check_access_rights)
-        checkAccessRightsForFilter(filter_query_tree, table_expression, query_context);
+    auto filter_query_tree = buildFilterQueryTree(std::move(filter_expression), table_expression, query_context, check_access_rights);
 
     return buildFilterInfo(
         std::move(filter_query_tree),

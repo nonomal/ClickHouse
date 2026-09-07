@@ -1997,10 +1997,11 @@ JoinTreeQueryPlan buildQueryPlanForTableExpression(TableExpressionNodePtr table_
                     {
                         /// The key is evaluated on the replicas on behalf of this user.
                         auto custom_key_ast = parseCustomKeyForTable(settings[Setting::parallel_replicas_custom_key], *query_context);
-                        checkAccessRightsForFilter(
-                            buildFilterQueryTree(custom_key_ast, table_expression_query_info.table_expression, query_context),
+                        buildFilterQueryTree(
+                            custom_key_ast,
                             table_expression_query_info.table_expression,
-                            query_context);
+                            query_context,
+                            /*check_access_rights=*/ true);
 
                         planner_context->getMutableQueryContext()->setSetting("distributed_group_by_no_merge", 2);
                         /// We disable prefer_localhost_replica because if one of the replicas is local it will create a single local plan
@@ -2302,9 +2303,10 @@ JoinTreeQueryPlan buildQueryPlanForTableExpression(TableExpressionNodePtr table_
                             if (auto & additional_filter_ast = table_expression_query_info.additional_filter_ast; additional_filter_ast)
                             {
                                 auto filter_query_tree = buildFilterQueryTree(
-                                    additional_filter_ast, table_expression_query_info.table_expression, query_context);
-                                checkAccessRightsForFilter(
-                                    filter_query_tree, table_expression_query_info.table_expression, query_context);
+                                    additional_filter_ast,
+                                    table_expression_query_info.table_expression,
+                                    query_context,
+                                    /*check_access_rights=*/ true);
 
                                 auto & outer_query_node = table_expression_query_info.query_tree->as<QueryNode &>();
                                 if (outer_query_node.hasWhere())
@@ -2332,11 +2334,11 @@ JoinTreeQueryPlan buildQueryPlanForTableExpression(TableExpressionNodePtr table_
                             /// against the Distributed table node here only to check access to the columns it reads.
                             if (table_expression_query_info.additional_filter_ast)
                             {
-                                auto dist_filter_query_tree = buildFilterQueryTree(
+                                buildFilterQueryTree(
                                     table_expression_query_info.additional_filter_ast,
                                     std::static_pointer_cast<ITableExpressionNode>(dist_table_node),
-                                    inner_context);
-                                checkAccessRightsForFilter(dist_filter_query_tree, dist_table_node, inner_context);
+                                    inner_context,
+                                    /*check_access_rights=*/ true);
                             }
 
                             /// The pushed-down read goes through `StorageDistributed::read` under inner_context, which
@@ -2350,11 +2352,11 @@ JoinTreeQueryPlan buildQueryPlanForTableExpression(TableExpressionNodePtr table_
                             {
                                 auto custom_key_ast = parseCustomKeyForTable(
                                     inner_context->getSettingsRef()[Setting::parallel_replicas_custom_key], *inner_context);
-                                checkAccessRightsForFilter(
-                                    buildFilterQueryTree(
-                                        custom_key_ast, std::static_pointer_cast<ITableExpressionNode>(dist_table_node), inner_context),
-                                    dist_table_node,
-                                    inner_context);
+                                buildFilterQueryTree(
+                                    custom_key_ast,
+                                    std::static_pointer_cast<ITableExpressionNode>(dist_table_node),
+                                    inner_context,
+                                    /*check_access_rights=*/ true);
                             }
 
                             /// Replace the view's table expression in the outer query with the
@@ -2591,10 +2593,11 @@ JoinTreeQueryPlan buildQueryPlanForTableExpression(TableExpressionNodePtr table_
                         {
                             /// The key is evaluated on the replicas on behalf of this user.
                             auto custom_key_ast = parseCustomKeyForTable(settings[Setting::parallel_replicas_custom_key], *query_context);
-                            checkAccessRightsForFilter(
-                                buildFilterQueryTree(custom_key_ast, table_expression_query_info.table_expression, query_context),
+                            buildFilterQueryTree(
+                                custom_key_ast,
                                 table_expression_query_info.table_expression,
-                                query_context);
+                                query_context,
+                                /*check_access_rights=*/ true);
 
                             planner_context->getMutableQueryContext()->setSetting("prefer_localhost_replica", Field{0});
                             auto modified_query_info = select_query_info;
