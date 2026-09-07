@@ -22,6 +22,7 @@ namespace ErrorCodes
 {
     extern const int ILLEGAL_COLUMN;
     extern const int BAD_ARGUMENTS;
+    extern const int VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE;
 }
 
 namespace
@@ -106,7 +107,7 @@ namespace
                 bool is_count_const = isColumnConst(*column_count);
                 if (is_count_const)
                 {
-                    Int64 count = getClampedInt64(*column_count, 0);
+                    Int64 count = getInt64(*column_count, 0);
                     vectorConstant(col_str, delim, count, vec_res, offsets_res, input_rows_count);
                 }
                 else
@@ -135,7 +136,7 @@ namespace
             for (size_t i = 0; i < input_rows_count; ++i)
             {
                 std::string_view str_ref = str_column->getDataAt(i);
-                Int64 count = getClampedInt64(*count_column, i);
+                Int64 count = getInt64(*count_column, i);
 
                 std::string_view res_ref;
                 if (!is_utf8)
@@ -200,7 +201,7 @@ namespace
             std::string_view str_ref{str};
             for (size_t i = 0; i < rows; ++i)
             {
-                Int64 count = getClampedInt64(*count_column, i);
+                Int64 count = getInt64(*count_column, i);
 
                 std::string_view res_ref;
                 if (!is_utf8)
@@ -214,14 +215,17 @@ namespace
             }
         }
 
-        static Int64 getClampedInt64(const IColumn & column, size_t index)
+        Int64 getInt64(const IColumn & column, size_t index) const
         {
             if (column.getDataType() == TypeIndex::UInt64)
             {
                 const UInt64 value = column.getUInt(index);
-                return value > static_cast<UInt64>(std::numeric_limits<Int64>::max())
-                    ? std::numeric_limits<Int64>::max()
-                    : static_cast<Int64>(value);
+                if (value > static_cast<UInt64>(std::numeric_limits<Int64>::max()))
+                    throw Exception(
+                        ErrorCodes::VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE,
+                        "The count argument of function {} is out of range for Int64: {}",
+                        getName(), value);
+                return static_cast<Int64>(value);
             }
 
             return column.getInt(index);
