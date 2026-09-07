@@ -11,6 +11,7 @@
 #include <Columns/ColumnsCommon.h>
 #include <Columns/IColumn.h>
 #include <DataTypes/DataTypeSet.h>
+#include <Interpreters/HashTablesStatistics.h>
 #include <Interpreters/PreparedSets.h>
 #include <Common/FieldAccurateComparison.h>
 #include <Common/SharedLockGuard.h>
@@ -535,11 +536,11 @@ void ApproximateRuntimeFilter::switchToBloomFilter()
         /// has filled and merged its copy. The hint tells that in advance: the expected fill rate of a filter of
         /// `bits` bits after `keys * hashes` bit inserts is `1 - exp(-keys * hashes / bits)`, see
         /// https://en.wikipedia.org/wiki/Bloom_filter#Probability_of_false_positives.
-        /// The hint may be stale: the statistics keep a measured size until a run finds less than half of it
-        /// (`HashJoinEntry::shouldBeUpdated`), so the build is skipped only if half of the hinted keys saturate the filter.
+        /// The hint may be stale and overstate the current key count, so the build is skipped only if the least
+        /// key count consistent with the hint saturates the filter.
         if (distinct_keys_hint_matches_filter_key)
         {
-            const double least_distinct_keys = static_cast<double>(*distinct_keys_hint) / 2.0;
+            const double least_distinct_keys = static_cast<double>(*distinct_keys_hint) / HashJoinEntry::MAX_OVERESTIMATION_FACTOR;
             const double predicted_fill_rate = -std::expm1(
                 -static_cast<double>(bloom_filter_hash_functions) * least_distinct_keys / (static_cast<double>(bloom_filter_bytes) * 8.0));
             if (predicted_fill_rate > max_ratio_of_set_bits_in_bloom_filter)
