@@ -83,6 +83,16 @@ const VersionToSettingsChangesMap & getSettingsChangesHistory()
             {"optimize_mutations_with_partition_pruning", false, true, "New setting to automatically prune partitions for mutations based on WHERE clause"},
             {"statistics_max_set_size_for_exact_selectivity_estimation", 10000, 10000, "The bound on the cost of estimating the selectivity of `IN` with a large set is kept under `compatibility` with an earlier version: the previous value is deliberately equal to the new one, so that the uncapped estimation, which could add hundreds of milliseconds to the planning of a single query, is not restored."},
             {"type_json_skip_null_typed_paths", false, false, "New setting to treat NULL values in typed JSON paths as absent"},
+            {"enable_join_runtime_filters", true, true, "The JOIN runtime filters became a Production tier feature."},
+            {"join_runtime_filter_exact_values_limit", 10000, 10000, "The JOIN runtime filters became a Production tier feature."},
+            {"join_runtime_bloom_filter_bytes", 512_KiB, 512_KiB, "The JOIN runtime filters became a Production tier feature."},
+            {"join_runtime_bloom_filter_hash_functions", 3, 3, "The JOIN runtime filters became a Production tier feature."},
+            {"join_runtime_filter_pass_ratio_threshold_for_disabling", 0.7, 0.7, "The JOIN runtime filters became a Production tier feature."},
+            {"join_runtime_filter_blocks_to_skip_before_reenabling", 30, 30, "The JOIN runtime filters became a Production tier feature."},
+            {"join_runtime_bloom_filter_max_ratio_of_set_bits", 0.7, 0.7, "The JOIN runtime filters became a Production tier feature."},
+            {"join_runtime_filter_min_probe_rows", 1000, 1000, "The JOIN runtime filters became a Production tier feature."},
+            {"enable_join_runtime_filters_index_analysis", false, false, "The JOIN runtime filters became a Production tier feature."},
+            {"rewrite_in_to_join", false, false, "The rewrite of `x IN subquery` to a JOIN became a Production tier feature."},
         });
         addSettingsChanges(settings_changes_history, "26.8",
         {
