@@ -209,11 +209,9 @@ ContextMutablePtr StorageInMemoryMetadata::getSQLSecurityOverriddenContext(Conte
     changed_settings.removeSetting("additional_table_filters");
 
     /// Internal initiator-set settings; an invoker-supplied pair would pick the slice of a `SAMPLE` in the body.
-    if (context->getClientInfo().query_kind != ClientInfo::QueryKind::SECONDARY_QUERY)
-    {
-        changed_settings.removeSetting("parallel_replicas_count");
-        changed_settings.removeSetting("parallel_replica_offset");
-    }
+    /// The query kind is client-declared, so do not gate on it.
+    changed_settings.removeSetting("parallel_replicas_count");
+    changed_settings.removeSetting("parallel_replica_offset");
 
     /// Drop the invoker's key even if only the definer's profile activates it.
     const bool drop_custom_key = context->canUseParallelReplicasCustomKey() || changed_settings.tryGet("parallel_replicas_custom_key");

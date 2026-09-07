@@ -228,6 +228,10 @@ run "$u_view" "SELECT c FROM v_def_sample SETTINGS enable_analyzer=$analyzer, pa
 echo "-- analyzer=$analyzer: 39 SQL SECURITY NONE view with SAMPLE, invoker supplies the replica slice"
 run "$u_view" "SELECT c FROM v_none_sample SETTINGS enable_analyzer=$analyzer, parallel_replicas_count = 2, parallel_replica_offset = 1"
 
+# The query kind is declared by the client, so it cannot gate the stripping. This case needs the native client: HTTP cannot set it.
+echo "-- analyzer=$analyzer: 40 definer view with SAMPLE, invoker declares a secondary query and supplies the replica slice"
+${CLICKHOUSE_CLIENT} --user "$u_view" --password password --query_kind secondary_query --query "SELECT c FROM v_def_sample SETTINGS enable_analyzer=$analyzer, parallel_replicas_count = 2, parallel_replica_offset = 1"
+
 done
 
 $CLICKHOUSE_CLIENT -n -q "
