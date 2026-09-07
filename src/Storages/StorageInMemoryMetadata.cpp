@@ -210,6 +210,18 @@ ContextMutablePtr StorageInMemoryMetadata::getSQLSecurityOverriddenContext(Conte
     /// Invoker filters must not be injected into a DEFINER/NONE body.
     changed_settings.removeSetting("additional_table_filters");
 
+    /// `parallel_replicas_count` and `parallel_replica_offset` are internal settings: the initiator puts them on
+    /// the wire for every replica it fans a query out to, so only a secondary query may legitimately carry them.
+    /// On an initial query they can only have been supplied by the invoker, and they must not reach the body:
+    /// `MergeTreeDataSelectExecutor` splits any `SAMPLE` in the body into `parallel_replicas_count` pieces and
+    /// reads the piece numbered `parallel_replica_offset`, and that happens regardless of whether parallel
+    /// replicas are enabled. The invoker would then choose which slice of the definer's sample the body reads.
+    if (context->getClientInfo().query_kind != ClientInfo::QueryKind::SECONDARY_QUERY)
+    {
+        changed_settings.removeSetting("parallel_replicas_count");
+        changed_settings.removeSetting("parallel_replica_offset");
+    }
+
     /// The invoker's `parallel_replicas_custom_key` is an expression over the columns of the tables the body
     /// reads. Inside the body it would be resolved and access-checked as the definer (or with no user at all),
     /// which would let the invoker probe columns of the underlying tables through the row count. The outer

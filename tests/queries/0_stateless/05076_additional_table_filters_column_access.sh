@@ -40,6 +40,12 @@ CREATE VIEW v_none_shadow SQL SECURITY NONE AS SELECT id, public_label, '' AS se
 -- gate for a filter keyed by the parameterized view.
 CREATE VIEW pv_def SQL SECURITY DEFINER DEFINER = CURRENT_USER AS SELECT id, public_label, secret_token FROM t WHERE id >= {min_id:UInt8};
 
+-- A sampled body: the definer picks the sample, and the invoker must not be able to narrow it down further.
+CREATE TABLE ts (id UInt8) ENGINE = MergeTree ORDER BY id SAMPLE BY id;
+INSERT INTO ts SELECT number FROM numbers(100);
+CREATE VIEW v_def_sample SQL SECURITY DEFINER DEFINER = CURRENT_USER AS SELECT count() AS c FROM ts SAMPLE 1/2;
+CREATE VIEW v_none_sample SQL SECURITY NONE AS SELECT count() AS c FROM ts SAMPLE 1/2;
+
 CREATE USER $u_low IDENTIFIED WITH plaintext_password BY 'password';
 CREATE USER $u_alias IDENTIFIED WITH plaintext_password BY 'password';
 CREATE USER $u_view IDENTIFIED WITH plaintext_password BY 'password';
@@ -61,6 +67,8 @@ GRANT SELECT ON $DB.v_def_shadow TO $u_view;
 GRANT SELECT ON $DB.v_none_shadow TO $u_view;
 GRANT SELECT ON $DB.v_def_prof TO $u_view;
 GRANT SELECT(id, public_label) ON $DB.pv_def TO $u_low;
+GRANT SELECT ON $DB.v_def_sample TO $u_view;
+GRANT SELECT ON $DB.v_none_sample TO $u_view;
 "
 
 # Every case is a separate query, so run them over HTTP: a client process per query is too slow under sanitizers.
@@ -205,7 +213,27 @@ run "$u_low" "SELECT sum(c) FROM (SELECT count() AS c FROM v_inv_d3_shadow) SETT
 echo "-- analyzer=1: 36 trivial view shadowing the denied column, no pushdown, custom key over the shadowing column"
 run "$u_low" "SELECT sum(c) FROM (SELECT count() AS c FROM v_inv_d3_shadow) SETTINGS enable_analyzer=1, optimize_trivial_view_pushdown_to_distributed = 0, max_parallel_replicas = 3, allow_experimental_parallel_reading_from_replicas = 1, parallel_replicas_mode = 'custom_key_sampling', parallel_replicas_custom_key = 'secret_token = ''$T'''"
 
+# `parallel_replicas_count` and `parallel_replica_offset` are internal settings that only the initiator may set.
+# `MergeTreeDataSelectExecutor` splits an active SAMPLE into `parallel_replicas_count` pieces and reads the piece
+# numbered `parallel_replica_offset` even when parallel replicas are disabled, so an invoker-supplied pair would
+# pick a slice of the definer's sample: the full sample is 100 rows, the second half of it is 36.
+for analyzer in 1 0; do
+
+echo "-- analyzer=$analyzer: 37 definer view with SAMPLE, control"
+run "$u_view" "SELECT c FROM v_def_sample SETTINGS enable_analyzer=$analyzer"
+
+echo "-- analyzer=$analyzer: 38 definer view with SAMPLE, invoker supplies the replica slice"
+run "$u_view" "SELECT c FROM v_def_sample SETTINGS enable_analyzer=$analyzer, parallel_replicas_count = 2, parallel_replica_offset = 1"
+
+echo "-- analyzer=$analyzer: 39 SQL SECURITY NONE view with SAMPLE, invoker supplies the replica slice"
+run "$u_view" "SELECT c FROM v_none_sample SETTINGS enable_analyzer=$analyzer, parallel_replicas_count = 2, parallel_replica_offset = 1"
+
+done
+
 $CLICKHOUSE_CLIENT -n -q "
+DROP VIEW IF EXISTS v_none_sample;
+DROP VIEW IF EXISTS v_def_sample;
+DROP TABLE IF EXISTS ts;
 DROP VIEW IF EXISTS pv_def;
 DROP VIEW IF EXISTS v_def_prof;
 DROP VIEW IF EXISTS v_none_shadow;
