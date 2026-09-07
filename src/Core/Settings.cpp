@@ -9213,6 +9213,8 @@ Use hash table size statistics collected from previous executions to size the JO
 )", 0) \
     DECLARE(Bool, rewrite_in_to_join, false, R"(
 Rewrite expressions like 'x IN subquery' to JOIN. This might be useful for optimizing the whole query with join reordering.
+
+Takes effect only when the analyzer is enabled (`enable_analyzer = 1`, the default); with the old analyzer (`enable_analyzer = 0`) the `IN` expression is left unchanged and evaluated as usual.
 )", 0) \
     \
     /** Experimental timeSeries* aggregate functions. */ \
