@@ -1,6 +1,7 @@
 #include <Columns/ColumnConst.h>
 #include <Columns/ColumnString.h>
 #include <Core/ColumnsWithTypeAndName.h>
+#include <Core/TypeId.h>
 #include <DataTypes/DataTypeString.h>
 #include <Functions/FunctionFactory.h>
 #include <Functions/FunctionHelpers.h>
@@ -11,6 +12,8 @@
 #include <Common/StringUtils.h>
 #include <Common/UTF8Helpers.h>
 #include <Common/register_objects.h>
+
+#include <limits>
 
 namespace DB
 {
@@ -103,7 +106,7 @@ namespace
                 bool is_count_const = isColumnConst(*column_count);
                 if (is_count_const)
                 {
-                    Int64 count = column_count->getInt(0);
+                    Int64 count = getClampedInt64(*column_count, 0);
                     vectorConstant(col_str, delim, count, vec_res, offsets_res, input_rows_count);
                 }
                 else
@@ -132,7 +135,7 @@ namespace
             for (size_t i = 0; i < input_rows_count; ++i)
             {
                 std::string_view str_ref = str_column->getDataAt(i);
-                Int64 count = count_column->getInt(i);
+                Int64 count = getClampedInt64(*count_column, i);
 
                 std::string_view res_ref;
                 if (!is_utf8)
@@ -197,7 +200,7 @@ namespace
             std::string_view str_ref{str};
             for (size_t i = 0; i < rows; ++i)
             {
-                Int64 count = count_column->getInt(i);
+                Int64 count = getClampedInt64(*count_column, i);
 
                 std::string_view res_ref;
                 if (!is_utf8)
@@ -209,6 +212,14 @@ namespace
 
                 appendToResultColumn<false>(res_ref, res_data, res_offsets);
             }
+        }
+
+        static Int64 getClampedInt64(const IColumn & column, size_t index)
+        {
+            if (column.getDataType() == TypeIndex::UInt64
+                && column.getUInt(index) > static_cast<UInt64>(std::numeric_limits<Int64>::max()))
+                return std::numeric_limits<Int64>::max();
+            return column.getInt(index);
         }
 
         template <bool padded>
