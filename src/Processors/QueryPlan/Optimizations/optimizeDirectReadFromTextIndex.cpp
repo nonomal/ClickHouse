@@ -229,16 +229,8 @@ void collectTextIndexReadInfos(const ReadFromMergeTree * read_from_merge_tree_st
         any_part_has_patches |= alter_conversions->hasPatches();
     }
 
-    /// A patch part is applied by the reader chain, which reads the patch key columns in its first
-    /// step and needs them there to match rows. A direct read makes that first step an index step,
-    /// whose reader produces exactly one column - the one synthesized from the index - and reads
-    /// nothing from the part, so the key columns cannot go there. Adding them anyway makes
-    /// `getIndexReadTaskForReadStep` hand the step to the main reader, which cannot produce the
-    /// index column, and the query silently answers no rows.
-    ///
-    /// A patch of an indexed column is already excluded by `canUseIndex` below, because
-    /// `AlterConversions::addPatchPart` records patched columns in `getAllUpdatedColumns` as well.
-    /// This covers the remaining case: a patch of a column that the index does not cover.
+    /// Applying a patch part needs the patch key columns in the first read step, and a direct read makes that
+    /// step an index step, whose reader produces only the synthesized index column and reads nothing from the part.
     if (any_part_has_patches)
     {
         LOG_TRACE(logger, "Cannot use direct reading from text index. Reason: a part has a pending patch");
