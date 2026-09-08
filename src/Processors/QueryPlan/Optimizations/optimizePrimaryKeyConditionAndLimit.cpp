@@ -30,7 +30,6 @@ void optimizePrimaryKeyConditionAndLimit(const Stack & stack)
     std::vector<const ActionsDAG *> expression_dags;
     /// A list, `expression_dags` keeps pointers into it.
     std::list<ActionsDAG> array_join_dags;
-    bool passed_array_join = false;
 
     /// Resolve the filter's columns down to the source through the steps below it.
     auto compose = [&](ActionsDAG filter_dag)
@@ -61,7 +60,7 @@ void optimizePrimaryKeyConditionAndLimit(const Stack & stack)
         else if (auto * limit_step = typeid_cast<LimitStep *>(iter->node->step.get()))
         {
             /// A LIMIT above an ARRAY JOIN says nothing about the source row count.
-            if (!passed_array_join)
+            if (array_join_dags.empty())
                 source_step_with_filter->setLimit(limit_step->getLimitForSorting());
             break;
         }
@@ -91,24 +90,19 @@ void optimizePrimaryKeyConditionAndLimit(const Stack & stack)
             auto & dag = array_join_dags.emplace_back(array_join_step->getInputHeaders().front()->getNamesAndTypesList());
             for (const auto & name : array_join_step->getColumns())
             {
-                const auto & array = dag.findInOutputs(name);
                 /// The atom must be `arrayJoin(col)`, not something named like the array column; the alias just keeps the name.
-                const auto & element = dag.addAlias(dag.addArrayJoin(array, {}), name);
-                for (auto & output : dag.getOutputs())
-                    if (output == &array)
-                        output = &element;
+                dag.addOrReplaceInOutputs(dag.addAlias(dag.addArrayJoin(dag.findInOutputs(name), {}), name));
             }
             expression_dags.push_back(&dag);
-            passed_array_join = true;
 
             /// The fused element filter is just a filter right above the join.
-            if (const auto * element_filter = array_join_step->getElementFilter())
+            if (const auto & element_filter = array_join_step->getElementFilter())
                 source_step_with_filter->addFilter(compose(element_filter->clone()), array_join_step->getElementFilterColumnName());
         }
         else if (auto * object_filter_step = typeid_cast<ObjectFilterStep *>(iter->node->step.get()))
         {
             /// Not composed, so above an ARRAY JOIN its names would mean the elements.
-            if (passed_array_join)
+            if (!array_join_dags.empty())
                 break;
             source_step_with_filter->addFilter(object_filter_step->getExpression().clone(), object_filter_step->getFilterColumnName());
         }
