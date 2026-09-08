@@ -243,8 +243,6 @@ size_t tryUseVectorSearchWithVectorIndexFirstPass(QueryPlan::Node * parent_node,
             "The `_distance` column is an internal virtual column of vector search and cannot be referenced directly in queries. "
             "Use the distance function (e.g. `L2Distance`, `cosineDistance`) in ORDER BY instead");
 
-    /// `getLimitForSorting` returns 0 when `limit + offset` overflows `UInt64`: the limit is unbounded, not a
-    /// request for zero neighbours. Below the `_distance` check, because an unreplaced `_distance` reads as zeros.
     if (n == 0)
         return no_layers_updated;
 
