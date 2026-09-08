@@ -139,7 +139,7 @@ To roll out a change, publish a new version and assign it to the group; to roll 
 </Step>
 <Step title="Verify telemetry" id="verify-telemetry">
 
-Open HyperDX and search for one of your services in the **Search** view; use **Chart Explorer** for metrics. With Managed ClickStack, open your service in the ClickHouse Cloud console and click **Launch ClickStack**.
+Open HyperDX and search for one of your services in the **Search** view; use **Chart Explorer** for metrics. With Managed ClickStack, open your service in the ClickHouse Cloud console and click **Launch ClickStack**. With self-managed ClickHouse, query the [ClickStack tables](/clickstack/ingesting-data/schemas) directly, for example `SELECT ServiceName, count() FROM otel_logs GROUP BY ServiceName`.
 </Step>
 </Steps>
 
