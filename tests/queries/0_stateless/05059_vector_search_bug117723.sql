@@ -1,13 +1,8 @@
 -- Tags: no-fasttest, no-parallel-replicas
--- no-fasttest: the vector similarity index is not compiled into the Fast test build.
--- no-parallel-replicas: with parallel replicas the vector search optimization is disabled, so the
---                       control below could not observe the index.
--- Regression test for https://github.com/ClickHouse/ClickHouse/issues/117723
--- A `LIMIT` + `OFFSET` that overflows `UInt64` must not be read as a request for zero neighbours.
 
--- The test runner can inject a `compatibility` value below 25.1, which reverts
--- `query_plan_try_use_vector_search` to false and turns the vector search optimization off, so the
--- first assertion below would find no index on a healthy build. Session wide.
+-- Regression test for https://github.com/ClickHouse/ClickHouse/issues/117723
+-- Vector search where `LIMIT` + `OFFSET` overflows `UInt64`
+
 SET query_plan_try_use_vector_search = 1;
 
 SET explain_query_plan_default = 'legacy';
@@ -47,8 +42,7 @@ WHERE explain LIKE '%vector_similarity%';
 
 SELECT count() FROM (SELECT id FROM tab ORDER BY L2Distance(vec, [0., 2.]) LIMIT 18446744073709551615 OFFSET 1);
 
--- `_distance` is internal to the optimization, and skipping the optimization must not turn a rejected
--- reference into a column of zeros.
+-- `_distance` only makes sense for vector search. Disallow read in case of overflow.
 SELECT id, _distance FROM tab ORDER BY L2Distance(vec, [0., 2.]) LIMIT 18446744073709551615 OFFSET 1; -- { serverError ILLEGAL_COLUMN }
 
 DROP TABLE tab;
