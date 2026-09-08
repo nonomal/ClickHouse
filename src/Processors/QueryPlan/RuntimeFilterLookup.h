@@ -67,7 +67,7 @@ public:
     /// Usage statistics
     void updateStats(UInt64 rows_checked, UInt64 rows_passed) const;
     const RuntimeFilterStats & getStats() const { return stats; }
-    void setFullyDisabled() { is_fully_disabled = true; }
+    void markKeySetDropped() { key_set_dropped = true; }
 
     Float64 getPassRatioThresholdForDisabling() const { return pass_ratio_threshold_for_disabling; }
     UInt64 getBlocksToSkipBeforeReenabling() const { return blocks_to_skip_before_reenabling; }
@@ -105,7 +105,9 @@ protected:
     /// How many rows should be skipped before trying to re-enable the filter after it was disabled due to
     /// low percentage of filtered rows
     mutable std::atomic<Int64> rows_to_skip = 0;
-    std::atomic<bool> is_fully_disabled = false;
+    /// The filter gave up on its key set (too many keys or a saturated bloom filter): it passes all rows and
+    /// only keeps tracking the key-range envelope.
+    std::atomic<bool> key_set_dropped = false;
 
     /// Key-range envelope tracking (see updateRange/getRecordedKeyRanges).
     bool index_analysis_enabled = false;
@@ -305,9 +307,9 @@ private:
     void insertIntoBloomFilter(ColumnPtr values);
     void switchToBloomFilter();
 
-    /// Marks the filter as passing everything. Also releases the exact values collected so far: they are
+    /// Marks the filter as passing all rows. Also releases the exact values collected so far: they are
     /// only a part of the build-side keys, and `getRecordedKeyValues` must not present them as all of them.
-    void disable();
+    void dropKeySet();
 
     /// Disables bloom filter if it is likely to have bad selectivity
     void checkBloomFilterWorthiness();

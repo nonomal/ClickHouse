@@ -147,7 +147,7 @@ void IRuntimeFilter::updateStats(UInt64 rows_checked, UInt64 rows_passed) const
 
 bool IRuntimeFilter::shouldSkip(size_t next_block_rows) const
 {
-    if (is_fully_disabled)
+    if (key_set_dropped)
     {
         stats.rows_skipped += next_block_rows;
         stats.blocks_skipped++;
@@ -311,7 +311,7 @@ void ExactContainsRuntimeFilter::finishInsertImpl()
     if (isFull())
     {
         /// Some keys were dropped so we cannot filter by partial set of keys
-        setFullyDisabled();
+        markKeySetDropped();
         releaseExactValues();
     }
 }
@@ -363,9 +363,9 @@ void ApproximateRuntimeFilter::insert(ColumnPtr values)
     if (inserts_are_finished)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Trying to insert into runtime filter after it was marked as finished");
 
-    if (is_fully_disabled)
+    if (key_set_dropped)
     {
-        /// The exact (set) or approximate values (bloom filter) were disabled. Only update the minimum-maximum value envelope.
+        /// The exact values or the bloom filter were dropped. Only update the minimum-maximum value envelope.
         updateRange(*values);
         return;
     }
@@ -390,8 +390,8 @@ void ApproximateRuntimeFilter::insert(ColumnPtr values)
 
 void ApproximateRuntimeFilter::finishInsertImpl()
 {
-    /// `disable` released the exact values that `Base::finishInsertImpl` would finish.
-    if (is_fully_disabled)
+    /// `dropKeySet` released the exact values that `Base::finishInsertImpl` would finish.
+    if (key_set_dropped)
         return;
 
     if (bloom_filter)
@@ -414,15 +414,15 @@ void ApproximateRuntimeFilter::merge(const IRuntimeFilter * source)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Trying to merge runtime filters with different types");
 
     /// We can only merge the min-max value envelopes.
-    if (source_typed->is_fully_disabled)
-        disable();
+    if (source_typed->key_set_dropped)
+        dropKeySet();
 
-    if (!is_fully_disabled)
+    if (!key_set_dropped)
     {
         if (source_typed->bloom_filter)
         {
             switchToBloomFilter();
-            if (!is_fully_disabled)
+            if (!key_set_dropped)
                 mergeBloomFilters(*bloom_filter, *source_typed->bloom_filter);
         }
         else
@@ -545,7 +545,7 @@ void ApproximateRuntimeFilter::switchToBloomFilter()
             if (predicted_fill_rate > max_ratio_of_set_bits_in_bloom_filter)
             {
                 ProfileEvents::increment(ProfileEvents::RuntimeFilterBloomFilterBuildsSkipped);
-                disable();
+                dropKeySet();
                 return;
             }
         }
@@ -557,9 +557,9 @@ void ApproximateRuntimeFilter::switchToBloomFilter()
     releaseExactValues();
 }
 
-void ApproximateRuntimeFilter::disable()
+void ApproximateRuntimeFilter::dropKeySet()
 {
-    setFullyDisabled();
+    markKeySetDropped();
     bloom_filter.reset();
     releaseExactValues();
 }
@@ -573,7 +573,7 @@ void ApproximateRuntimeFilter::checkBloomFilterWorthiness()
         set_bits += std::popcount(word);
     /// If too many bits are set then it is likely that the filter will not filter out much
     if (static_cast<double>(set_bits) > max_ratio_of_set_bits_in_bloom_filter * static_cast<double>(total_bits))
-        setFullyDisabled();
+        markKeySetDropped();
 }
 
 SharedFixedHashTableRuntimeFilter::SharedFixedHashTableRuntimeFilter(
