@@ -316,8 +316,7 @@ private:
     const Float64 max_ratio_of_set_bits_in_bloom_filter = 0.7;
     /// Measured distinct build-side keys from prior statistics, used to choose the bloom filter size.
     const std::optional<UInt64> distinct_keys_hint;
-    /// Whether the filter key is the whole join key, so that the hint counts this filter's distinct keys.
-    /// A per-column filter of a multi-key join only gets an upper bound of them from the hint.
+    /// Is the filter key the whole join key? If yes, then `distinct_keys_hint` represents this entire's filter's distinct keys.
     const bool distinct_keys_hint_matches_filter_key;
 
     BloomFilterPtr bloom_filter;

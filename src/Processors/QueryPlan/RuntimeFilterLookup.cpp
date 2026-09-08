@@ -531,18 +531,17 @@ void ApproximateRuntimeFilter::switchToBloomFilter()
     {
         bloom_filter_bytes = growBloomFilterBytes(*distinct_keys_hint, bloom_filter_hash_functions, getBytesLimit(), max_ratio_of_set_bits_in_bloom_filter);
 
-        /// The filter size is capped (`MAX_STATS_SIZED_BLOOM_FILTER_BYTES`), so a build side with more distinct keys
-        /// than fit at the maximal density is discarded by `checkBloomFilterWorthiness` after every build thread
-        /// has filled and merged its copy. The hint tells that in advance: the expected fill rate of a filter of
-        /// `bits` bits after `keys * hashes` bit inserts is `1 - exp(-keys * hashes / bits)`, see
+        /// The filter size is capped (`MAX_STATS_SIZED_BLOOM_FILTER_BYTES`), so a build side with more distinct keys is discarded by
+        /// `checkBloomFilterWorthiness`. With the hint we can predict that in advance: the expected fill rate of a filter of `bits` bits
+        /// after `keys * hashes` bit inserts is `1 - exp(-keys * hashes / bits)`, see
         /// https://en.wikipedia.org/wiki/Bloom_filter#Probability_of_false_positives.
+        ///
         /// The hint may be stale and overstate the current key count, so the build is skipped only if the least
         /// key count consistent with the hint saturates the filter.
         if (distinct_keys_hint_matches_filter_key)
         {
-            const double least_distinct_keys = static_cast<double>(*distinct_keys_hint) / HashJoinEntry::MAX_OVERESTIMATION_FACTOR;
-            const double predicted_fill_rate = -std::expm1(
-                -static_cast<double>(bloom_filter_hash_functions) * least_distinct_keys / (static_cast<double>(bloom_filter_bytes) * 8.0));
+            double least_distinct_keys = static_cast<double>(*distinct_keys_hint) / HashJoinEntry::MAX_OVERESTIMATION_FACTOR;
+            double predicted_fill_rate = -std::expm1(-static_cast<double>(bloom_filter_hash_functions) * least_distinct_keys / (static_cast<double>(bloom_filter_bytes) * 8.0));
             if (predicted_fill_rate > max_ratio_of_set_bits_in_bloom_filter)
             {
                 ProfileEvents::increment(ProfileEvents::RuntimeFilterBloomFilterBuildsSkipped);
