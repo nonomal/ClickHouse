@@ -4,20 +4,16 @@
 1	1
 11	0
 21	0
-100
-100
-200	2
-200	2
-100	1
-100	1
-materialized
+-- materialized
 100	1
 1
+-- With preprocessor
 0
 10
 0
 10
 patched indexed column
+99
 99
 99
 1
