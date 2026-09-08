@@ -91,7 +91,7 @@
     <query>OPTIMIZE TABLE {database}.wr_planned SETTINGS allow_experimental_iceberg_compaction = 1</query>
 
     <!-- update_no_match: mutation planning only - per-file stats refute the predicate, so nothing is scanned or rewritten and no snapshot is committed. -->
-    <query>ALTER TABLE {database}.wr_planned UPDATE l_quantity = l_quantity + 1 WHERE l_partkey &lt; 0</query>
+    <query><![CDATA[ALTER TABLE {database}.wr_planned UPDATE l_quantity = l_quantity + 1 WHERE l_partkey < 0]]></query>
 
 
     <drop_query>DROP TABLE IF EXISTS {database}.wr_large</drop_query>
