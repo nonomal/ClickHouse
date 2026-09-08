@@ -151,6 +151,31 @@
     <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 95000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
     <query>SELECT count(), sum(l_quantity) FROM {database}.deep_history SETTINGS use_iceberg_metadata_files_cache = 0</query>
 
+    <!-- manifest_grid: twelve single-partition commits of five data files each - many manifests, many entries per manifest. -->
+    <create_query>DROP TABLE IF EXISTS {database}.manifest_grid</create_query>
+    <create_query>CREATE TABLE {database}.manifest_grid (l_orderkey Int32, l_quantity Float64, l_month Int32) ENGINE = IcebergLocal((SELECT value FROM system.server_settings WHERE name = 'user_files_path') || '/manifest_grid_' || toString(toUnixTimestamp64Micro(now64(6))) || '/', 'Parquet') PARTITION BY (l_month)</create_query>
+    <create_query>INSERT INTO {database}.manifest_grid SELECT l_orderkey, l_quantity, 199401 AS l_month FROM tpch10.lineitem LIMIT 0, 50000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+    <create_query>INSERT INTO {database}.manifest_grid SELECT l_orderkey, l_quantity, 199402 AS l_month FROM tpch10.lineitem LIMIT 50000, 50000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+    <create_query>INSERT INTO {database}.manifest_grid SELECT l_orderkey, l_quantity, 199403 AS l_month FROM tpch10.lineitem LIMIT 100000, 50000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+    <create_query>INSERT INTO {database}.manifest_grid SELECT l_orderkey, l_quantity, 199404 AS l_month FROM tpch10.lineitem LIMIT 150000, 50000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+    <create_query>INSERT INTO {database}.manifest_grid SELECT l_orderkey, l_quantity, 199405 AS l_month FROM tpch10.lineitem LIMIT 200000, 50000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+    <create_query>INSERT INTO {database}.manifest_grid SELECT l_orderkey, l_quantity, 199406 AS l_month FROM tpch10.lineitem LIMIT 250000, 50000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+    <create_query>INSERT INTO {database}.manifest_grid SELECT l_orderkey, l_quantity, 199407 AS l_month FROM tpch10.lineitem LIMIT 300000, 50000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+    <create_query>INSERT INTO {database}.manifest_grid SELECT l_orderkey, l_quantity, 199408 AS l_month FROM tpch10.lineitem LIMIT 350000, 50000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+    <create_query>INSERT INTO {database}.manifest_grid SELECT l_orderkey, l_quantity, 199409 AS l_month FROM tpch10.lineitem LIMIT 400000, 50000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+    <create_query>INSERT INTO {database}.manifest_grid SELECT l_orderkey, l_quantity, 199410 AS l_month FROM tpch10.lineitem LIMIT 450000, 50000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+    <create_query>INSERT INTO {database}.manifest_grid SELECT l_orderkey, l_quantity, 199411 AS l_month FROM tpch10.lineitem LIMIT 500000, 50000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+    <create_query>INSERT INTO {database}.manifest_grid SELECT l_orderkey, l_quantity, 199412 AS l_month FROM tpch10.lineitem LIMIT 550000, 50000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+
+    <!-- manifest_list_prune: partition-only filter with cache off; all twelve manifests are decoded today, and whole-manifest skipping via the manifest-list partition summary will show here once implemented. -->
+    <query>SELECT count(), sum(l_quantity) FROM {database}.manifest_grid WHERE l_month = 199406 SETTINGS use_iceberg_metadata_files_cache = 0</query>
+
+    <!-- manifest_decode_serial: cache-off full scan decoding the twelve manifests one at a time. -->
+    <query>SELECT count(), sum(l_quantity) FROM {database}.manifest_grid SETTINGS use_iceberg_metadata_files_cache = 0, iceberg_manifest_decode_concurrency = 1</query>
+
+    <!-- manifest_decode_parallel: the same scan with concurrent manifest decoding; the pair isolates the parallel decode path. -->
+    <query>SELECT count(), sum(l_quantity) FROM {database}.manifest_grid SETTINGS use_iceberg_metadata_files_cache = 0, iceberg_manifest_decode_concurrency = 8</query>
+
     <drop_query>DROP TABLE IF EXISTS {database}.evo_add</drop_query>
     <drop_query>DROP TABLE IF EXISTS {database}.evo_drop</drop_query>
     <drop_query>DROP TABLE IF EXISTS {database}.evo_rename</drop_query>
@@ -167,4 +192,5 @@
     <drop_query>DROP TABLE IF EXISTS {database}.del_read</drop_query>
     <drop_query>DROP TABLE IF EXISTS {database}.many_manifests</drop_query>
     <drop_query>DROP TABLE IF EXISTS {database}.deep_history</drop_query>
+    <drop_query>DROP TABLE IF EXISTS {database}.manifest_grid</drop_query>
 </test>
