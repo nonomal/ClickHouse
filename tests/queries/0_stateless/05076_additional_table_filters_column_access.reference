@@ -130,7 +130,9 @@ ACCESS_DENIED
 100
 -- analyzer=1: 39 SQL SECURITY NONE view with SAMPLE, invoker supplies the replica slice
 100
--- analyzer=1: 40 definer view with SAMPLE, invoker declares a secondary query and supplies the replica slice
+-- analyzer=1: 40 definer view with SAMPLE read through Distributed by three followers in sampling_key mode
+100
+-- analyzer=1: 41 SQL SECURITY NONE view with SAMPLE read through Distributed by three followers in sampling_key mode
 100
 -- analyzer=0: 37 definer view with SAMPLE, control
 100
@@ -138,5 +140,7 @@ ACCESS_DENIED
 100
 -- analyzer=0: 39 SQL SECURITY NONE view with SAMPLE, invoker supplies the replica slice
 100
--- analyzer=0: 40 definer view with SAMPLE, invoker declares a secondary query and supplies the replica slice
+-- analyzer=0: 40 definer view with SAMPLE read through Distributed by three followers in sampling_key mode
+100
+-- analyzer=0: 41 SQL SECURITY NONE view with SAMPLE read through Distributed by three followers in sampling_key mode
 100

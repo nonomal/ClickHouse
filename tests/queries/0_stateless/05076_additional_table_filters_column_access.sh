@@ -45,6 +45,8 @@ CREATE TABLE ts (id UInt8) ENGINE = MergeTree ORDER BY id SAMPLE BY id;
 INSERT INTO ts SELECT number FROM numbers(100);
 CREATE VIEW v_def_sample SQL SECURITY DEFINER DEFINER = CURRENT_USER AS SELECT count() AS c FROM ts SAMPLE 1/2;
 CREATE VIEW v_none_sample SQL SECURITY NONE AS SELECT count() AS c FROM ts SAMPLE 1/2;
+CREATE TABLE d_def_sample (c UInt64) ENGINE = Distributed(test_cluster_one_shard_three_replicas_localhost, currentDatabase(), v_def_sample);
+CREATE TABLE d_none_sample (c UInt64) ENGINE = Distributed(test_cluster_one_shard_three_replicas_localhost, currentDatabase(), v_none_sample);
 
 CREATE USER $u_low IDENTIFIED WITH plaintext_password BY 'password';
 CREATE USER $u_alias IDENTIFIED WITH plaintext_password BY 'password';
@@ -69,6 +71,8 @@ GRANT SELECT ON $DB.v_def_prof TO $u_view;
 GRANT SELECT(id, public_label) ON $DB.pv_def TO $u_low;
 GRANT SELECT ON $DB.v_def_sample TO $u_view;
 GRANT SELECT ON $DB.v_none_sample TO $u_view;
+GRANT SELECT ON $DB.d_def_sample TO $u_view;
+GRANT SELECT ON $DB.d_none_sample TO $u_view;
 "
 
 # Every case is a separate query, so run them over HTTP: a client process per query is too slow under sanitizers.
@@ -228,13 +232,17 @@ run "$u_view" "SELECT c FROM v_def_sample SETTINGS enable_analyzer=$analyzer, pa
 echo "-- analyzer=$analyzer: 39 SQL SECURITY NONE view with SAMPLE, invoker supplies the replica slice"
 run "$u_view" "SELECT c FROM v_none_sample SETTINGS enable_analyzer=$analyzer, parallel_replicas_count = 2, parallel_replica_offset = 1"
 
-# The query kind is declared by the client, so it cannot gate the stripping. This case needs the native client: HTTP cannot set it.
-echo "-- analyzer=$analyzer: 40 definer view with SAMPLE, invoker declares a secondary query and supplies the replica slice"
-${CLICKHOUSE_CLIENT} --user "$u_view" --password password --query_kind secondary_query --query "SELECT c FROM v_def_sample SETTINGS enable_analyzer=$analyzer, parallel_replicas_count = 2, parallel_replica_offset = 1"
+echo "-- analyzer=$analyzer: 40 definer view with SAMPLE read through Distributed by three followers in sampling_key mode"
+run "$u_view" "SELECT sum(c) FROM d_def_sample SETTINGS enable_analyzer=$analyzer, max_parallel_replicas = 3, allow_experimental_parallel_reading_from_replicas = 1, parallel_replicas_mode = 'sampling_key', prefer_localhost_replica = 0"
+
+echo "-- analyzer=$analyzer: 41 SQL SECURITY NONE view with SAMPLE read through Distributed by three followers in sampling_key mode"
+run "$u_view" "SELECT sum(c) FROM d_none_sample SETTINGS enable_analyzer=$analyzer, max_parallel_replicas = 3, allow_experimental_parallel_reading_from_replicas = 1, parallel_replicas_mode = 'sampling_key', prefer_localhost_replica = 0"
 
 done
 
 $CLICKHOUSE_CLIENT -n -q "
+DROP TABLE IF EXISTS d_none_sample;
+DROP TABLE IF EXISTS d_def_sample;
 DROP VIEW IF EXISTS v_none_sample;
 DROP VIEW IF EXISTS v_def_sample;
 DROP TABLE IF EXISTS ts;
