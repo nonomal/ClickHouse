@@ -1,4 +1,4 @@
-<test profile_all_queries="1" run_all_queries="1">
+<test>
     <settings>
         <iceberg_metadata_log_level>none</iceberg_metadata_log_level>
     </settings>

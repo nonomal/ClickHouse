@@ -1,12 +1,11 @@
-<test profile_all_queries="1" run_all_queries="1">
+<test>
     <settings>
         <allow_insert_into_iceberg>1</allow_insert_into_iceberg>
-        <mutations_sync>2</mutations_sync>
         <iceberg_metadata_log_level>none</iceberg_metadata_log_level>
         <iceberg_delete_data_on_drop>1</iceberg_delete_data_on_drop>
     </settings>
 
-    <!-- RW-FEATURES suite: per-feature IcebergLocal tables built once in <create_query>, each measuring a stable read or idempotent mutation not covered by iceberg_suite_write.xml. -->
+    <!-- RW-FEATURES suite: per-feature IcebergLocal tables built once in <create_query>; each query depends only on its own table's setup and runs, so CI may sample and shuffle them freely; iceberg_suite_write.xml keeps only the append-only write paths. -->
 
     <substitutions>
         <substitution>
@@ -77,6 +76,81 @@
     <create_query>INSERT INTO {database}.small_files SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 200000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 1000</create_query>
     <query>SELECT count(), sum(l_quantity) FROM {database}.small_files</query>
 
+    <!-- update_every_file: min/max stats cannot refute the modulo predicate, so every run scans all three data files and rewrites the matches; 30K rows keeps a single run under the report's 2 s budget. -->
+    <create_query>DROP TABLE IF EXISTS {database}.upd_files</create_query>
+    <create_query>CREATE TABLE {database}.upd_files (l_orderkey Int32, l_partkey Int32, l_quantity Float64) ENGINE = IcebergLocal((SELECT value FROM system.server_settings WHERE name = 'user_files_path') || '/upd_files_' || toString(toUnixTimestamp64Micro(now64(6))) || '/', 'Parquet')</create_query>
+    <create_query>INSERT INTO {database}.upd_files SELECT l_orderkey, l_partkey, l_quantity FROM tpch10.lineitem LIMIT 30000 SETTINGS max_threads = 1, max_insert_threads = 1, iceberg_insert_max_rows_in_data_file = 10000</create_query>
+    <query>ALTER TABLE {database}.upd_files UPDATE l_quantity = l_quantity + 1 WHERE l_partkey % 10 = 0</query>
+
+    <!-- modify_column: metadata-only schema commit; the prewarm run does the real Int32 -> Int64 promotion, later runs re-commit the same type. -->
+    <create_query>DROP TABLE IF EXISTS {database}.evo_promote</create_query>
+    <create_query>CREATE TABLE {database}.evo_promote (l_orderkey Int32, l_suppkey Int32, l_quantity Float64) ENGINE = IcebergLocal((SELECT value FROM system.server_settings WHERE name = 'user_files_path') || '/evo_promote_' || toString(toUnixTimestamp64Micro(now64(6))) || '/', 'Parquet')</create_query>
+    <create_query>INSERT INTO {database}.evo_promote SELECT l_orderkey, l_suppkey, l_quantity FROM tpch10.lineitem LIMIT 100000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <query>ALTER TABLE {database}.evo_promote MODIFY COLUMN l_suppkey Int64</query>
+
+    <!-- read_after_type_promotion: the promotion happens at setup, so every run reads still-Int32 data files under the Int64 schema. -->
+    <create_query>DROP TABLE IF EXISTS {database}.evo_promoted</create_query>
+    <create_query>CREATE TABLE {database}.evo_promoted (l_orderkey Int32, l_suppkey Int32, l_quantity Float64) ENGINE = IcebergLocal((SELECT value FROM system.server_settings WHERE name = 'user_files_path') || '/evo_promoted_' || toString(toUnixTimestamp64Micro(now64(6))) || '/', 'Parquet')</create_query>
+    <create_query>INSERT INTO {database}.evo_promoted SELECT l_orderkey, l_suppkey, l_quantity FROM tpch10.lineitem LIMIT 100000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>ALTER TABLE {database}.evo_promoted MODIFY COLUMN l_suppkey Int64</create_query>
+    <query>SELECT count(), sum(l_suppkey) FROM {database}.evo_promoted</query>
+
+    <!-- delete_position_deletes: the prewarm run writes the real position deletes, later runs scan under merge-on-read, match nothing and commit nothing; 50K rows keeps a single run under the report's 2 s budget. -->
+    <create_query>DROP TABLE IF EXISTS {database}.del_pos</create_query>
+    <create_query>CREATE TABLE {database}.del_pos (l_orderkey Int32, l_quantity Float64) ENGINE = IcebergLocal((SELECT value FROM system.server_settings WHERE name = 'user_files_path') || '/del_pos_' || toString(toUnixTimestamp64Micro(now64(6))) || '/', 'Parquet')</create_query>
+    <create_query>INSERT INTO {database}.del_pos SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 50000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <query>ALTER TABLE {database}.del_pos DELETE WHERE l_orderkey % 7 = 0</query>
+
+    <!-- mor_read_position_deletes_roaring: position deletes are written at setup, so every run is a full roaring-bitmap merge-on-read scan over fixed state. -->
+    <create_query>DROP TABLE IF EXISTS {database}.del_read</create_query>
+    <create_query>CREATE TABLE {database}.del_read (l_orderkey Int32, l_quantity Float64) ENGINE = IcebergLocal((SELECT value FROM system.server_settings WHERE name = 'user_files_path') || '/del_read_' || toString(toUnixTimestamp64Micro(now64(6))) || '/', 'Parquet')</create_query>
+    <create_query>INSERT INTO {database}.del_read SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 100000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>ALTER TABLE {database}.del_read DELETE WHERE l_orderkey % 7 = 0</create_query>
+    <query>SELECT count(), sum(l_quantity) FROM {database}.del_read SETTINGS use_roaring_bitmap_iceberg_positional_deletes = 1</query>
+
+    <!-- optimize_manifests: ten setup commits produce ten manifests; the prewarm run consolidates them, later runs measure the early-returning threshold check. -->
+    <create_query>DROP TABLE IF EXISTS {database}.many_manifests</create_query>
+    <create_query>CREATE TABLE {database}.many_manifests (l_orderkey Int32, l_quantity Float64) ENGINE = IcebergLocal((SELECT value FROM system.server_settings WHERE name = 'user_files_path') || '/many_manifests_' || toString(toUnixTimestamp64Micro(now64(6))) || '/', 'Parquet')</create_query>
+    <create_query>INSERT INTO {database}.many_manifests SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 0, 10000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.many_manifests SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 10000, 10000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.many_manifests SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 20000, 10000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.many_manifests SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 30000, 10000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.many_manifests SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 40000, 10000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.many_manifests SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 50000, 10000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.many_manifests SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 60000, 10000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.many_manifests SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 70000, 10000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.many_manifests SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 80000, 10000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.many_manifests SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 90000, 10000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <query>
+        OPTIMIZE TABLE {database}.many_manifests MANIFEST
+        SETTINGS allow_experimental_iceberg_compaction = 1, iceberg_manifest_min_count_to_compact = 8
+    </query>
+
+    <!-- deep_history_scan: cache-off full scan over a fixed twenty-commit history built at setup, measuring manifest read planning. -->
+    <create_query>DROP TABLE IF EXISTS {database}.deep_history</create_query>
+    <create_query>CREATE TABLE {database}.deep_history (l_orderkey Int32, l_quantity Float64) ENGINE = IcebergLocal((SELECT value FROM system.server_settings WHERE name = 'user_files_path') || '/deep_history_' || toString(toUnixTimestamp64Micro(now64(6))) || '/', 'Parquet')</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 0, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 5000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 10000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 15000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 20000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 25000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 30000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 35000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 40000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 45000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 50000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 55000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 60000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 65000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 70000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 75000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 80000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 85000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 90000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <create_query>INSERT INTO {database}.deep_history SELECT l_orderkey, l_quantity FROM tpch10.lineitem LIMIT 95000, 5000 SETTINGS max_threads = 1, max_insert_threads = 1</create_query>
+    <query>SELECT count(), sum(l_quantity) FROM {database}.deep_history SETTINGS use_iceberg_metadata_files_cache = 0</query>
+
     <drop_query>DROP TABLE IF EXISTS {database}.evo_add</drop_query>
     <drop_query>DROP TABLE IF EXISTS {database}.evo_drop</drop_query>
     <drop_query>DROP TABLE IF EXISTS {database}.evo_rename</drop_query>
@@ -86,4 +160,11 @@
     <drop_query>DROP TABLE IF EXISTS {database}.sorted_li</drop_query>
     <drop_query>DROP TABLE IF EXISTS {database}.nested_t</drop_query>
     <drop_query>DROP TABLE IF EXISTS {database}.small_files</drop_query>
+    <drop_query>DROP TABLE IF EXISTS {database}.upd_files</drop_query>
+    <drop_query>DROP TABLE IF EXISTS {database}.evo_promote</drop_query>
+    <drop_query>DROP TABLE IF EXISTS {database}.evo_promoted</drop_query>
+    <drop_query>DROP TABLE IF EXISTS {database}.del_pos</drop_query>
+    <drop_query>DROP TABLE IF EXISTS {database}.del_read</drop_query>
+    <drop_query>DROP TABLE IF EXISTS {database}.many_manifests</drop_query>
+    <drop_query>DROP TABLE IF EXISTS {database}.deep_history</drop_query>
 </test>
