@@ -67,6 +67,9 @@ struct TextIndexReadInfo
     MergeTreeIndexPtr index_helper = nullptr;
     bool is_materialized = false;
     bool is_fully_materialized = false;
+    /// Set when a patch part applies to this read. The entry is still used to inject the
+    /// tokenizer/preprocessor/postprocessor into the filter, just not to read from the index.
+    bool has_pending_patch = false;
 };
 
 using TextIndexReadInfos = absl::flat_hash_map<String, TextIndexReadInfo>;
@@ -231,11 +234,10 @@ void collectTextIndexReadInfos(const ReadFromMergeTree * read_from_merge_tree_st
 
     /// Applying a patch part needs the patch key columns in the first read step, and a direct read makes that
     /// step an index step, whose reader produces only the synthesized index column and reads nothing from the part.
+    /// Only the direct read is given up here: the entries below are still collected, because the filter rewrite
+    /// takes the index's preprocessor from them and dropping it would change which rows match.
     if (any_part_has_patches)
-    {
         LOG_TRACE(logger, "Cannot use direct reading from text index. Reason: a part has a pending patch");
-        return;
-    }
 
     for (const auto & index : indexes->skip_indexes.useful_indices)
     {
@@ -259,7 +261,8 @@ void collectTextIndexReadInfos(const ReadFromMergeTree * read_from_merge_tree_st
             .condition = index.condition_template->generateUnsubstituted(),
             .index = &index,
             .is_materialized = num_materialized_parts > 0,
-            .is_fully_materialized = num_materialized_parts == unique_parts.size()
+            .is_fully_materialized = num_materialized_parts == unique_parts.size(),
+            .has_pending_patch = any_part_has_patches
         };
     }
 }
@@ -664,7 +667,8 @@ private:
 
             /// Use direct read only when enabled and the entry is direct-read-eligible (has `index`). Otherwise
             /// just inject the tokenizer/preprocessor/postprocessor (no virtual column), same as None mode.
-            if (!direct_read_from_text_index || !info.index || search_query->getDirectReadMode() == TextIndexDirectReadMode::None)
+            if (!direct_read_from_text_index || !info.index || info.has_pending_patch
+                || search_query->getDirectReadMode() == TextIndexDirectReadMode::None)
             {
                 selected_conditions.emplace_back(search_query, index_name, String{}, &info, is_index_analyzed);
                 used_index_columns.insert(index_header.begin()->name);

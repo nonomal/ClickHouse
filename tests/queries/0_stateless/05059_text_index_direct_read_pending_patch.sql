@@ -54,6 +54,36 @@ SELECT count() > 0 FROM
 
 DROP TABLE t_text_index_patch;
 
+-- A text index declared with a preprocessor: the search has to keep applying it while an update is
+-- pending on some other column. Giving up the whole index analysis instead of only the read from the
+-- index would drop `lower(s)` and make `Hello World` stop matching `hello`.
+DROP TABLE IF EXISTS t_text_index_preprocessor;
+
+CREATE TABLE t_text_index_preprocessor
+(
+    id UInt64,
+    c UInt64,
+    s String,
+    INDEX idx_s s TYPE text(tokenizer = splitByNonAlpha, preprocessor = lower(s))
+)
+ENGINE = MergeTree ORDER BY id
+SETTINGS enable_block_number_column = 1, enable_block_offset_column = 1, apply_patches_on_merge = 0;
+
+INSERT INTO t_text_index_preprocessor SELECT number, 0, if(number < 10, 'Hello World', 'foo bar') FROM numbers(1000);
+
+-- The preprocessor applies on the index path only, so these two legitimately differ.
+SELECT count() FROM t_text_index_preprocessor WHERE hasAnyTokens(s, 'hello') SETTINGS use_skip_indexes = 0;
+SELECT count() FROM t_text_index_preprocessor WHERE hasAnyTokens(s, 'hello') SETTINGS use_skip_indexes = 1;
+
+SYSTEM STOP MERGES t_text_index_preprocessor;
+UPDATE t_text_index_preprocessor SET c = 1 WHERE id = 500;
+
+-- Same two answers with an update pending on `c`, which the index does not cover.
+SELECT count() FROM t_text_index_preprocessor WHERE hasAnyTokens(s, 'hello') SETTINGS use_skip_indexes = 0;
+SELECT count() FROM t_text_index_preprocessor WHERE hasAnyTokens(s, 'hello') SETTINGS use_skip_indexes = 1;
+
+DROP TABLE t_text_index_preprocessor;
+
 -- Updating the indexed column itself: the search has to see the new value rather than answer `zebra`
 -- or `tok1` from the index built before the update.
 SELECT 'patched indexed column';
