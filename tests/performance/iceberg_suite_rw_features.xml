@@ -108,6 +108,9 @@
     <create_query>ALTER TABLE {database}.del_read DELETE WHERE l_orderkey % 7 = 0</create_query>
     <query>SELECT count(), sum(l_quantity) FROM {database}.del_read SETTINGS use_roaring_bitmap_iceberg_positional_deletes = 1</query>
 
+    <!-- mor_read_position_deletes_streaming: the same fixed delete state scanned through IcebergStreamingPositionDeleteTransform (the default path), which merges sorted delete-file positions against each data file instead of materializing a bitmap; pairs with the roaring query above to isolate the two MoR implementations. -->
+    <query>SELECT count(), sum(l_quantity) FROM {database}.del_read SETTINGS use_roaring_bitmap_iceberg_positional_deletes = 0</query>
+
     <!-- optimize_manifests: ten setup commits produce ten manifests; the prewarm run consolidates them, later runs measure the early-returning threshold check. -->
     <create_query>DROP TABLE IF EXISTS {database}.many_manifests</create_query>
     <create_query>CREATE TABLE {database}.many_manifests (l_orderkey Int32, l_quantity Float64) ENGINE = IcebergLocal((SELECT value FROM system.server_settings WHERE name = 'user_files_path') || '/many_manifests_' || toString(toUnixTimestamp64Micro(now64(6))) || '/', 'Parquet')</create_query>
