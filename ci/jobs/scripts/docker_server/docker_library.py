@@ -117,7 +117,9 @@ def test_docker_library(test_results, check_images=None) -> None:
                 )
                 cmd = f"{shlex.quote(run_sh.as_posix())} {shlex.quote(image)} {config_args}"
                 test_results.append(
-                    Result.from_commands_run(name=f"{test_name} ({image})", command=cmd)
+                    Result.from_commands_run(
+                        name=f"{test_name} ({image})", command=cmd, with_info=True
+                    )
                 )
             finally:
                 if generated_config:
