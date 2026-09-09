@@ -39,4 +39,6 @@ chCli() {
 # The uid comes from the server's own process, so a `chmod` in place of the `chown` would not pass.
 server_uid="$(docker exec "$cid" sed -n 's/^Uid:[[:space:]]*\([0-9][0-9]*\).*/\1/p' /proc/1/status)"
 [ -n "$server_uid" ]
-[ "$(docker exec "$cid" stat -c '%u' /mnt/clickhouse-cache/docker_test_cache)" = "$server_uid" ]
+[ "$server_uid" != 0 ]
+docker exec -u "$server_uid" "$cid" test -d /mnt/clickhouse-cache/docker_test_cache
+[ "$(docker exec -u "$server_uid" "$cid" stat -c '%u' /mnt/clickhouse-cache/docker_test_cache)" = "$server_uid" ]
