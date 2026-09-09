@@ -110,7 +110,11 @@ Change the default database for a user:
 ALTER USER user1 DEFAULT DATABASE database1
 ```
 
-`DEFAULT DATABASE NONE` clears the user's default database. To use a database named `NONE`, quote its name with backticks: ``DEFAULT DATABASE `NONE```.
+`DEFAULT DATABASE NONE` clears the user's default database. To use a database named `NONE`, quote its name with backticks:
+
+```sql
+DEFAULT DATABASE `NONE`
+```
 
 ## VALID UNTIL Clause {#valid-until-clause}
 
