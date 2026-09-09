@@ -13,6 +13,7 @@ def clickhouse_cluster():
                 "configs/storage.xml",
                 "configs/disk_connection_limit.xml",
             ],
+            user_configs=["configs/users.xml"],
             with_minio=True,
             with_zookeeper=True,
         )
@@ -52,7 +53,9 @@ def test_disk_hard_limit_hit(clickhouse_cluster):
             a19 String)
         ENGINE = MergeTree()
         ORDER BY id
-        SETTINGS storage_policy = 's3', min_bytes_for_wide_part=1000000;
+        -- auto_statistics_types='': otherwise the new materialize_statistics_on_insert default writes an
+        -- extra statistics file on INSERT, needing one more S3 connection that trips the hard limit.
+        SETTINGS storage_policy = 's3', min_bytes_for_wide_part=1000000, auto_statistics_types='';
     """)
 
     node.query("SYSTEM STOP MERGES test_table")
@@ -65,7 +68,7 @@ def test_disk_hard_limit_hit(clickhouse_cluster):
     query_id=insert_query_id
     )
 
-    node.query("SYSTEM FLUSH LOGS")
+    node.query("SYSTEM FLUSH LOGS query_log")
     puts, connections = node.query(
     f"""
         SELECT ProfileEvents['S3PutObject'], ProfileEvents['DiskConnectionsCreated'] FROM system.query_log WHERE query_id = '{insert_query_id}' AND type = 'QueryFinish'
@@ -83,7 +86,7 @@ def test_disk_hard_limit_hit(clickhouse_cluster):
     ).strip()
     assert(result == "1\t0\t1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t11\t12\t13\t14\t15\t16\t17\t18\t19")
 
-    node.query("SYSTEM FLUSH LOGS")
+    node.query("SYSTEM FLUSH LOGS query_log")
     gets, connections = node.query(
     f"""
         SELECT ProfileEvents['S3GetObject'], ProfileEvents['DiskConnectionsCreated'] FROM system.query_log WHERE query_id = '{select_query_id}' AND type = 'QueryFinish'
